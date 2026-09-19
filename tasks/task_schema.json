@@ -1,0 +1,27 @@
+{
+  "$comment": "Documents the expected shape of a task file for the human-authored matrix in tasks/README.md. This is a schema, not a task - no scored content lives here.",
+  "type": "object",
+  "required": ["id", "kind", "prompt", "expect"],
+  "properties": {
+    "id": {"type": "string", "description": "unique task id, becomes part of the run directory name"},
+    "kind": {"type": "string", "enum": ["canonical", "refusal", "concurrency", "data_quality"]},
+    "prompt": {"type": "string", "description": "the request text, e.g. the canonical question or a narrowed variant"},
+    "exec_mode": {"type": "string", "enum": ["propose", "create-next-actions"], "default": "propose"},
+    "setup": {
+      "type": "object",
+      "description": "human-authored fixture/identity strategy for this task against the shared book - e.g. which deal id(s) this task owns, so cleanup only touches records the test itself created",
+      "properties": {
+        "deal_ids": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "string"}
+      }
+    },
+    "expect": {
+      "type": "object",
+      "description": "what the human-authored verifier checks - postconditions in the live database, not the run artifact's own claims",
+      "properties": {
+        "result_type": {"type": "string", "enum": ["CanonicalAnswer", "RefusalResult"]},
+        "assertions": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
