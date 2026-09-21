@@ -21,9 +21,10 @@ Implementing in phases per `capstone_plan.md` (kept outside this repo). As of
 (the sales-domain refusal is the actual, current behavior, not a placeholder);
 Phase 5 is deliberately left to a human team member. Gate G1 is still
 unresolved, but is now *measured* by `--task preflight` rather than asserted.
-Still outstanding: no live credential has ever exercised the JSON-RPC
-transport, and `harness/loop.py` (the model-driven loop) has no model backend
-wired to it yet. Full status: `docs/open_items.md`.
+The model-driven loop is reachable via `--task loop` with a pluggable backend
+(`anthropic:` or `ollama:`). Still outstanding: no live credential has ever
+exercised the JSON-RPC transport, and neither model backend has been run
+against a real model. Full status: `docs/open_items.md`.
 
 ## Layout
 
@@ -44,6 +45,7 @@ src/pipeline_agent/
     workflow.py              the deterministic canonical-task logic (Phase 2)
     refusal.py                builds the Track B refusal result (Phase 3)
   preflight.py                 read-only probe: tool catalogue + entity access
+  llm.py                        model backends for the loop (anthropic | ollama)
   runner.py                    CLI entry point (Phase 4)
 tasks/          human-authored task matrix goes here (schema only, so far)
 tests/          human-authored verifiers go here (empty on purpose - see tests/README.md)
@@ -74,6 +76,21 @@ surface=generic, tools=13, G1=sales_blocked, canonical task BLOCKED
 
 The default `--task canonical` runs the canonical request against
 `StubMCPClient` - no credentials needed.
+
+`--task loop` runs the model-driven loop instead of the deterministic
+workflow: the model chooses each tool call itself, which is what the refusal
+task needs to exercise. It requires `MODEL_NAME` as `backend:model`:
+
+```
+MODEL_NAME=anthropic:claude-opus-5 \
+  PYTHONPATH=src python3 -m pipeline_agent.runner --task loop --mode live \
+  --request "<the human-authored task prompt>"
+```
+
+Backends are `anthropic:<model>` (needs `pip install 'pipeline-agent[anthropic]'`
+and a credential) and `ollama:<model>` (needs a local `ollama serve`). The
+request text is passed through verbatim, so scored task prompts stay
+human-authored - see `tasks/README.md`.
 Produces a run folder under `runs/`. `--mode live` requires
 `AGENTSWITCH_MCP_URL`/`AGENTSWITCH_MCP_TOKEN` (copy `.env.example` to `.env`)
 uses JSON-RPC POST at `/api/mcp`; a credentialed smoke test remains required.

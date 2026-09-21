@@ -10,6 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+# The harness itself stays stdlib-only. Only the `anthropic` model backend for
+# --task loop needs a package, and it is imported lazily, so installing this
+# extra is required only if you select that backend. The ollama backend is
+# plain HTTP and needs nothing.
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 

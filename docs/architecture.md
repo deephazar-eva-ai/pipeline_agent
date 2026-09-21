@@ -34,7 +34,8 @@ refusal task, and any future task that needs judgement rather than fixed
 logic):
 
 ```
-harness/loop.run_loop(task, client, llm, model)
+harness/loop.run_loop(task, client, llm, model)     <- runner --task loop
+  -> llm.build_llm(MODEL_NAME)   anthropic:<model> | ollama:<model>
 ```
 
 This is "the loop" in the harness sense - the model picks a tool call each
@@ -44,6 +45,23 @@ task's safety-critical parts (rot detection, contact classification, the
 create-Activity idempotency guard) - those are plain Python in
 `agent/workflow.py`, per capstone_plan.md Phase 2's own instruction: "do not
 leave required safety checks to free-form prompting."
+
+`--task loop` passes `--request` straight through, so the prompt for any
+scored task stays human-authored (`tasks/README.md`). The loop records its own
+steps, so the runner hands it the raw client rather than the recorder - wrapping
+it would log every call twice.
+
+`llm.py` keeps the repo's stdlib-only stance: the Anthropic SDK is imported
+lazily inside its own backend, so `pip install` is needed only if you select
+it, and the other two tasks never import the module at all.
+
+### The no-retry guard is the harness's job, not the prompt's
+
+`SYSTEM` tells the model not to retry a refused call, but `MAX_REPEAT_DENIALS`
+enforces it: a second denied call to the same `(tool, entity)` force-stops the
+run with `ended="refused"`. A model that ignores the instruction and then
+claims success cannot produce a `claimed_success: true` artifact - the guard
+trips before its `done` action is ever read.
 
 ## Why two MCP client implementations
 

@@ -27,7 +27,9 @@ from pipeline_agent.agent.workflow import run_canonical_task
 from pipeline_agent.config import Settings
 from pipeline_agent.harness.artifacts import run_artifact
 from pipeline_agent.harness.base import TaskRun
+from pipeline_agent.harness.loop import run_loop
 from pipeline_agent.harness.recording import RecordingMCPClient
+from pipeline_agent.llm import LLMConfigError, build_llm
 from pipeline_agent.mcp.real_client import RealMCPClient
 from pipeline_agent.mcp.stub_client import StubMCPClient
 from pipeline_agent.mcp.tool_names import SurfaceError
@@ -93,7 +95,8 @@ async def main_async(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     try:
         client = StubMCPClient() if args.mode == "dry-run" else RealMCPClient(settings)
-    except (RuntimeError, ValueError, SurfaceError) as exc:
+        llm = build_llm(settings.model_name) if args.task == "loop" else None
+    except (RuntimeError, ValueError, SurfaceError, LLMConfigError) as exc:
         # Misconfiguration, not a failed run: no artifact is written, because
         # nothing ran. A stack trace here would bury an actionable message.
         print(f"cannot start: {exc}")
@@ -105,14 +108,21 @@ async def main_async(args: argparse.Namespace) -> int:
 
     with run_artifact(settings.output_dir, task["id"], task=task, settings=settings) as writer:
         run = TaskRun(task_id=task["id"], model=settings.model_name or f"none ({args.mode})")
-        recorder = RecordingMCPClient(client, run.steps)
+        result: Any = None
         t0 = time.time()
         try:
-            if args.task == "preflight":
-                result = await run_preflight(recorder, configured_surface=settings.mcp_tool_surface)
+            if args.task == "loop":
+                # run_loop records its own steps and returns its own TaskRun;
+                # handing it the recorder would log every call twice.
+                run = await run_loop(task, client, llm, settings.model_name,
+                                      max_steps=args.max_steps)
+            elif args.task == "preflight":
+                result = await run_preflight(RecordingMCPClient(client, run.steps),
+                                              configured_surface=settings.mcp_tool_surface)
             else:
                 request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode))
-                result = await run_canonical_task(recorder, request, run_id=run_id)
+                result = await run_canonical_task(RecordingMCPClient(client, run.steps),
+                                                   request, run_id=run_id)
         except Exception as exc:
             run.error = f"{type(exc).__name__}: {exc}"
             run.ended = "error"
@@ -121,7 +131,14 @@ async def main_async(args: argparse.Namespace) -> int:
             raise
 
         run.seconds = time.time() - t0
-        _report_result(run, result)
+        if result is None:
+            # The loop reports itself: what it claimed, and how it stopped.
+            print(f"loop ended: {run.ended} after {run.calls} model call(s), "
+                  f"claimed_success={run.claimed_success}")
+            if run.error:
+                print(f"error: {run.error}")
+        else:
+            _report_result(run, result)
         writer.finalize(run)
         print(f"run artifact: {writer.run_dir}")
 
@@ -133,10 +150,14 @@ def main() -> int:
     parser.add_argument("--mode", choices=["dry-run", "live"], default="dry-run",
                          help="dry-run uses the in-memory stub client (no credentials needed); "
                               "live uses JSON-RPC MCP (requires AGENTSWITCH_MCP_URL/_TOKEN).")
-    parser.add_argument("--task", choices=["canonical", "preflight"], default="canonical",
-                         help="canonical runs the three-part pipeline question; preflight is a "
-                              "read-only capability probe (tool catalogue + entity access) that "
-                              "re-checks Gate G1 instead of trusting the recorded result.")
+    parser.add_argument("--task", choices=["canonical", "preflight", "loop"], default="canonical",
+                         help="canonical runs the three-part pipeline question through the "
+                              "deterministic workflow; preflight is a read-only capability probe "
+                              "(tool catalogue + entity access) that re-checks Gate G1 instead of "
+                              "trusting the recorded result; loop hands --request to the "
+                              "model-driven loop, which picks its own tool calls (needs MODEL_NAME).")
+    parser.add_argument("--max-steps", type=int, default=12,
+                         help="maximum model turns for --task loop.")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")
     parser.add_argument("--request", default=CANONICAL_REQUEST)
     args = parser.parse_args()

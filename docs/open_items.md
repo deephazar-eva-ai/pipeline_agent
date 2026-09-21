@@ -47,7 +47,16 @@ becomes the next blocker.
    preflight detects it and says so when `MCP_TOOL_SURFACE` disagrees.
    `generic` is required for the canonical task's aggregate `Activity.report`;
    `entity_scoped` cannot express it and intentionally fails closed.
-5. **Re-fetch full IDs/evidence for the two platform data-bug candidates
+5. **Run `--task loop` against a real model.** The loop is now reachable
+   (`llm.py`, backends `anthropic:<model>` and `ollama:<model>`), and its
+   control flow is checked against a scripted stand-in model: a clean refusal,
+   a retry that correctly trips `MAX_REPEAT_DENIALS`, an allowed read, and an
+   unparseable reply. **Neither backend has issued a single real API call** -
+   no key and no local daemon in the environment where it was written. Run
+   each once before relying on it; the failure modes to expect are transport
+   (wrong host/key) rather than logic.
+
+6. **Re-fetch full IDs/evidence for the two platform data-bug candidates
    before filing** (malformed Pipeline stage records; the Goal
    target/current_value anomaly). Not done in this repo - that work belongs
    with the bug-filing effort tracked in `EAG_V3_capstone/bugs/mybugs.json`,
@@ -65,6 +74,13 @@ becomes the next blocker.
   `list(CRMPreferences)` ok, `list(Deal)` refused, `list(Activity)` refused)
   with `created_record_ids: []` and `claimed_success: false`. Checked
   2026-09-21 by reading the artifact, not the code.
+- The same command against an unreachable host returns `gate_g1:
+  inconclusive`, not `sales_blocked` - a network fault must never be reported
+  as a policy refusal. Checked 2026-09-21.
+- `run_loop`'s refusal handling, under a scripted stand-in model: it stops a
+  retry of a denied call via `MAX_REPEAT_DENIALS`, and the offending model's
+  later `claimed_success: true` never reaches the artifact because the guard
+  trips first. Checked 2026-09-21.
 
 ## What this repo does NOT do (and shouldn't, yet)
 
