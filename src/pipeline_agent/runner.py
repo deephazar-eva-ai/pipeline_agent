@@ -6,10 +6,10 @@
 --mode dry-run needs no credentials: it runs the exact same workflow code
 against StubMCPClient, which is how Phase 0's exit condition ("a harmless MCP
 read succeeds through the adapted harness, with a persisted run folder...")
-is checkable before Gate G1 and the MCP transport contract are resolved.
---mode live requires AGENTSWITCH_MCP_URL/AGENTSWITCH_MCP_TOKEN and currently
-fails on its first call - RealMCPClient.call_tool is intentionally
-unimplemented until that contract is confirmed (see mcp/real_client.py).
+is checkable before Gate G1 is resolved.
+--mode live requires AGENTSWITCH_MCP_URL/AGENTSWITCH_MCP_TOKEN. It uses the
+captured JSON-RPC-over-HTTP contract; a credentialed smoke test is still
+required before treating that connection as proven.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import os
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from pipeline_agent.agent.contract import AgentRequest, CanonicalAnswer, ExecutionMode, RefusalResult
 from pipeline_agent.agent.workflow import run_canonical_task
@@ -29,6 +30,8 @@ from pipeline_agent.harness.base import TaskRun
 from pipeline_agent.harness.recording import RecordingMCPClient
 from pipeline_agent.mcp.real_client import RealMCPClient
 from pipeline_agent.mcp.stub_client import StubMCPClient
+from pipeline_agent.mcp.tool_names import SurfaceError
+from pipeline_agent.preflight import PreflightReport, run_preflight
 
 CANONICAL_REQUEST = "Which deals are rotting, who has not been contacted, and what is the next action on each?"
 
@@ -47,21 +50,69 @@ def _load_dotenv(path: str = ".env") -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
+PREFLIGHT_REQUEST = ("Preflight: enumerate this credential's tool catalogue and probe "
+                     "read access to CRMPreferences, Deal and Activity.")
+
+
+def _report_result(run: TaskRun, result: Any) -> None:
+    """Fold a task's return value into the run record and say so on stdout."""
+    run.final_answer = dataclasses.asdict(result)
+
+    if isinstance(result, CanonicalAnswer):
+        run.claimed_success = True
+        run.ended = "done"
+        run.created_record_ids = [
+            d.next_action["id"] for d in result.deals
+            if d.action_status.value == "created" and d.next_action and "id" in d.next_action
+        ]
+        print(result.summary)
+
+    elif isinstance(result, RefusalResult):
+        run.claimed_success = False
+        run.ended = "refused"
+        print(f"REFUSED: {result.message}")
+
+    elif isinstance(result, PreflightReport):
+        # claimed_success here means "this seat could run the canonical task",
+        # not "the probe executed" - a preflight that cleanly proves the seat
+        # is blocked has done its job, but must not read as a green run.
+        run.claimed_success = result.canonical_task_ready
+        run.ended = "done"
+        print(result.summary())
+        for probe in result.probes:
+            flag = "  " if probe["outcome"] == probe["expected"] else "! "
+            print(f"{flag}{probe['entity']:<16} {probe['domain']:<8} {probe['outcome']}: {probe['detail']}")
+        for change in result.changes_from_recorded_state:
+            print(f"CHANGED: {change}")
+        for note in result.notes:
+            print(f"note: {note}")
+
+
 async def main_async(args: argparse.Namespace) -> int:
     _load_dotenv()
     settings = Settings.from_env()
-    client = StubMCPClient() if args.mode == "dry-run" else RealMCPClient(settings)
+    try:
+        client = StubMCPClient() if args.mode == "dry-run" else RealMCPClient(settings)
+    except (RuntimeError, ValueError, SurfaceError) as exc:
+        # Misconfiguration, not a failed run: no artifact is written, because
+        # nothing ran. A stack trace here would bury an actionable message.
+        print(f"cannot start: {exc}")
+        return 2
 
     run_id = uuid.uuid4().hex
-    task = {"id": f"canonical__{args.mode}", "prompt": args.request, "run_id": run_id}
-    request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode))
+    prompt = PREFLIGHT_REQUEST if args.task == "preflight" else args.request
+    task = {"id": f"{args.task}__{args.mode}", "prompt": prompt, "run_id": run_id}
 
     with run_artifact(settings.output_dir, task["id"], task=task, settings=settings) as writer:
         run = TaskRun(task_id=task["id"], model=settings.model_name or f"none ({args.mode})")
         recorder = RecordingMCPClient(client, run.steps)
         t0 = time.time()
         try:
-            result = await run_canonical_task(recorder, request, run_id=run_id)
+            if args.task == "preflight":
+                result = await run_preflight(recorder, configured_surface=settings.mcp_tool_surface)
+            else:
+                request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode))
+                result = await run_canonical_task(recorder, request, run_id=run_id)
         except Exception as exc:
             run.error = f"{type(exc).__name__}: {exc}"
             run.ended = "error"
@@ -70,19 +121,7 @@ async def main_async(args: argparse.Namespace) -> int:
             raise
 
         run.seconds = time.time() - t0
-        run.final_answer = dataclasses.asdict(result)
-        if isinstance(result, CanonicalAnswer):
-            run.claimed_success = True
-            run.ended = "done"
-            run.created_record_ids = [
-                d.next_action["id"] for d in result.deals
-                if d.action_status.value == "created" and d.next_action and "id" in d.next_action
-            ]
-            print(result.summary)
-        elif isinstance(result, RefusalResult):
-            run.claimed_success = False
-            run.ended = "refused"
-            print(f"REFUSED: {result.message}")
+        _report_result(run, result)
         writer.finalize(run)
         print(f"run artifact: {writer.run_dir}")
 
@@ -93,8 +132,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Seat 07 Pipeline agent once.")
     parser.add_argument("--mode", choices=["dry-run", "live"], default="dry-run",
                          help="dry-run uses the in-memory stub client (no credentials needed); "
-                              "live uses RealMCPClient (requires AGENTSWITCH_MCP_URL/_TOKEN, "
-                              "and currently fails - transport not yet implemented).")
+                              "live uses JSON-RPC MCP (requires AGENTSWITCH_MCP_URL/_TOKEN).")
+    parser.add_argument("--task", choices=["canonical", "preflight"], default="canonical",
+                         help="canonical runs the three-part pipeline question; preflight is a "
+                              "read-only capability probe (tool catalogue + entity access) that "
+                              "re-checks Gate G1 instead of trusting the recorded result.")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")
     parser.add_argument("--request", default=CANONICAL_REQUEST)
     args = parser.parse_args()

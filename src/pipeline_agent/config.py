@@ -12,11 +12,19 @@ from dataclasses import dataclass, field
 
 _SECRET_FIELDS = ("mcp_token",)
 
+# The platform snapshot contains two MCP catalogues.  The seat-specific
+# catalogue exposes the 13 generic tools (where the entity travels in the
+# arguments); the standard MCP catalogue exposes entity-scoped names such as
+# ``Deal.list``.  This is deliberately a setting rather than a guess made by
+# the workflow.
+DEFAULT_MCP_TOOL_SURFACE = "generic"
+
 
 @dataclass(frozen=True)
 class Settings:
     mcp_url: str = ""
     mcp_token: str = ""
+    mcp_tool_surface: str = DEFAULT_MCP_TOOL_SURFACE
     tenant: str = "suryodaya"
     model_name: str = ""
     output_dir: str = "runs"
@@ -27,6 +35,7 @@ class Settings:
         return cls(
             mcp_url=e.get("AGENTSWITCH_MCP_URL", ""),
             mcp_token=e.get("AGENTSWITCH_MCP_TOKEN", ""),
+            mcp_tool_surface=e.get("MCP_TOOL_SURFACE", DEFAULT_MCP_TOOL_SURFACE),
             tenant=e.get("AGENTSWITCH_TENANT", "suryodaya"),
             model_name=e.get("MODEL_NAME", ""),
             output_dir=e.get("OUTPUT_DIR", "runs"),

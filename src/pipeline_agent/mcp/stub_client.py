@@ -3,13 +3,16 @@
 Purpose: let the harness run end-to-end - model loop, tool-call trace, run
 artifact - without live credentials, so Phase 0's exit condition ("a harmless
 MCP read succeeds through the adapted harness") is checkable today instead of
-blocked on Gate G1 and the MCP transport contract.
+blocked on Gate G1 or a credentialed live smoke test.
 
-It reproduces exactly two things confirmed against the live platform earlier
+It reproduces exactly three things confirmed against the live platform earlier
 in this project, and nothing else is asserted as realistic:
   1. CRMPreferences.deal_rot_days = 30, crm domain, readable.
   2. Deal/Activity are in the excluded `sales` domain -> PermissionDeniedError,
      matching the real, already-verified refusal this seat's policy produces.
+  3. The tool catalogue is the 13 generic tools, verbatim from the captured
+     EAG_V3_capstone/document/agent_tools.json ("total": 13) - a real capture
+     of this seat's surface, not an invented catalogue.
 
 Anything not listed here is out of scope for the stub; it exists to exercise
 plumbing, not to stand in for the live database in a scored verifier. Human-
@@ -21,7 +24,7 @@ import uuid
 from typing import Any
 
 from pipeline_agent.mcp.client import (
-    ENTITY_DOMAIN, EXCLUDED_DOMAINS, MCPClient, MCPToolError, PermissionDeniedError,
+    ENTITY_DOMAIN, EXCLUDED_DOMAINS, KNOWN_TOOLS, MCPClient, MCPToolError, PermissionDeniedError,
 )
 
 
@@ -34,6 +37,9 @@ class StubMCPClient(MCPClient):
             "lead_score_threshold": None,
         }]
         self._created: list[dict] = []
+
+    async def list_tools(self) -> list[dict] | None:
+        return [{"name": name} for name in sorted(KNOWN_TOOLS)]
 
     async def call_tool(self, name: str, arguments: dict) -> Any:
         entity = arguments.get("entity")

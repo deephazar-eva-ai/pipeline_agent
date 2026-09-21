@@ -18,6 +18,14 @@ from whoever owns this seat's policy config. Track A (the full three-part
 answer) cannot be implemented beyond what's here until that answer arrives
 and a live smoke test confirms `Deal.list`/`Activity.list` actually work.
 
+**How to re-check it (new):** `--task preflight` now measures this rather
+than trusting the 2026-09-18 transcript. It probes `CRMPreferences`, `Deal`
+and `Activity` read-only and reports a `gate_g1` verdict of `sales_blocked`,
+`sales_reachable`, or `inconclusive`, flagging any drift from the recorded
+state as a `CHANGED:` line. Run it against a live credential the moment one
+exists; if it comes back `sales_reachable`, G1 is resolved and item 2 below
+becomes the next blocker.
+
 ## Checklist (capstone_plan.md §5)
 
 1. **Resolve the `sales` access/charter mismatch (G1).** Unresolved - see above.
@@ -29,9 +37,16 @@ and a live smoke test confirms `Deal.list`/`Activity.list` actually work.
 3. **Reconcile whether `core` is genuinely accessible.** Not needed yet -
    nothing in this codebase depends on the `core` domain. Revisit only if a
    future design needs it.
-4. **Obtain the AgentSwitch MCP integration contract (auth, transport) before
-   deep wiring.** Not obtained. `mcp/real_client.py` deliberately raises
-   `NotImplementedError` rather than guess at one - see that file's docstring.
+4. **Credentialed MCP smoke test.** The captured OpenAPI contract is now
+   implemented: JSON-RPC 2.0 POST to `/api/mcp`, bearer auth, no SSE, standard
+   initialize/initialized handshake. This remains **unverified against a live
+   seat credential**. `--task preflight --mode live` is now the one command
+   that performs this check: it runs the handshake, enumerates the catalogue,
+   and does the read-only `CRMPreferences` probe, all in one persisted run.
+   The catalogue shape no longer has to be configured correctly in advance -
+   preflight detects it and says so when `MCP_TOOL_SURFACE` disagrees.
+   `generic` is required for the canonical task's aggregate `Activity.report`;
+   `entity_scoped` cannot express it and intentionally fails closed.
 5. **Re-fetch full IDs/evidence for the two platform data-bug candidates
    before filing** (malformed Pipeline stage records; the Goal
    target/current_value anomaly). Not done in this repo - that work belongs
@@ -46,11 +61,15 @@ and a live smoke test confirms `Deal.list`/`Activity.list` actually work.
   `docs/architecture.md`'s exit-condition section.
 - No write is attempted anywhere on the refusal path - confirmed by reading
   the produced `result.json`, not by trusting the code's own claim.
+- `--task preflight --mode dry-run` produces a four-step trace (`tools/list`,
+  `list(CRMPreferences)` ok, `list(Deal)` refused, `list(Activity)` refused)
+  with `created_record_ids: []` and `claimed_success: false`. Checked
+  2026-09-21 by reading the artifact, not the code.
 
 ## What this repo does NOT do (and shouldn't, yet)
 
 - Author the scored task matrix or its verifiers. Per the grading rubric, an
   AI-authored test scores zero - `tasks/README.md` and `tests/README.md`
   explain what's expected there and leave it to the human team member.
-- Implement `RealMCPClient.call_tool`. Doing that before item 4 above is
-  answered means guessing at a wire format that may need retrofitting later.
+- Treat the current transport implementation as live-proven before the
+  read-only credentialed smoke test in item 4 succeeds.

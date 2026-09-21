@@ -4,13 +4,9 @@ Only `call_tool` is abstract. Every named helper (`list_`, `get`, `report`, ...)
 is a thin, typed wrapper over it, so a real transport only has to implement
 one method and every existing workflow call works unchanged.
 
-The transport itself is intentionally NOT implemented here. AgentSwitch's MCP
-auth/transport contract hasn't been confirmed against this codebase yet (see
-docs/open_items.md, item 4) - guessing at a wire format and shipping it quietly
-is exactly the kind of thing that gets retrofitted later at real cost. Two
-implementations exist:
+Two implementations exist:
 
-  RealMCPClient   raises clearly until the contract is filled in
+  RealMCPClient   JSON-RPC 2.0 POST client for the documented MCP endpoint
   StubMCPClient   an in-memory fixture, used for the dry-run harness smoke test
 """
 from __future__ import annotations
@@ -97,6 +93,15 @@ class MCPClient(abc.ABC):
         normal result, so callers can tell the two apart."""
         raise NotImplementedError
 
+    async def list_tools(self) -> list[dict] | None:
+        """The tool catalogue this credential actually exposes.
+
+        Returns None when the client cannot enumerate one. Deliberately not
+        abstract: enumeration is a transport capability used by preflight.py,
+        and no workflow function needs it to do its job.
+        """
+        return None
+
     async def get_schema(self, entity: str) -> Any:
         return await self.call_tool("get_schema", {"entity": entity})
 
@@ -133,7 +138,9 @@ class MCPClient(abc.ABC):
         return await self.call_tool("transition", args)
 
     async def search(self, query: str, *, entity: str | None = None) -> Any:
-        args: dict[str, Any] = {"search": query}
+        # The parameter is `query`, not `search` - `search` is the free-text
+        # argument on `list`, which is a different tool. See agent_tools.json.
+        args: dict[str, Any] = {"query": query}
         if entity:
             args["entity"] = entity
         return await self.call_tool("search", args)

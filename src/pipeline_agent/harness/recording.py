@@ -23,6 +23,16 @@ class RecordingMCPClient(MCPClient):
         self._inner = inner
         self._steps = steps
 
+    async def list_tools(self) -> list[dict] | None:
+        try:
+            tools = await self._inner.list_tools()
+        except MCPToolError as e:
+            self._steps.append(Step("error", "tools/list", "", False, str(e)))
+            raise
+        detail = "not enumerable by this client" if tools is None else f"{len(tools)} tool(s)"
+        self._steps.append(Step("tool_call", "tools/list", "", True, detail))
+        return tools
+
     async def call_tool(self, name: str, arguments: dict) -> Any:
         entity = arguments.get("entity", "")
         try:

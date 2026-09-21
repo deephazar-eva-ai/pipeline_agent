@@ -1,14 +1,33 @@
 # Architecture (Phase 0 exit artifact)
 
 ```
-runner.py          CLI entry point
+runner.py          CLI entry point (--task canonical | preflight)
   -> agent/workflow.run_canonical_task   deterministic Track A/B logic
+  -> preflight.run_preflight             read-only capability + access probe
        -> mcp/client.MCPClient           abstract tool-call interface
             -> mcp/stub_client.StubMCPClient    (dry-run: in-memory fixture)
-            -> mcp/real_client.RealMCPClient    (live: unimplemented, see below)
+            -> mcp/real_client.RealMCPClient    (live: JSON-RPC POST /api/mcp)
   -> harness/recording.RecordingMCPClient        records every call into TaskRun.steps
   -> harness/artifacts.run_artifact               persists the run BEFORE scoring
 ```
+
+## Preflight: measuring the seat instead of assuming it
+
+`--task preflight` answers three questions this repo previously could only
+assert: which tool catalogue the credential actually exposes (measured via
+`tools/list`, not read from `MCP_TOOL_SURFACE`), whether the aggregate
+`report` tool the canonical task needs is in it, and whether the `sales`
+domain is genuinely blocked right now.
+
+It is read-only by construction - every probe is `list(entity, limit=1)` -
+and it records each expected-vs-actual outcome, so a *change* in the seat's
+policy shows up as a `CHANGED:` line rather than being silently absorbed. Gate
+G1 therefore becomes a dated, re-runnable measurement instead of a remembered
+result from a chat transcript. Run it first against any new credential.
+
+Note that a preflight proving the seat is blocked still sets
+`claimed_success: false` in its artifact: the probe worked, but the seat
+cannot do its job, and those must not look the same to a scorer.
 
 A second, independent path exists for free-form/model-driven tasks (mainly the
 refusal task, and any future task that needs judgement rather than fixed
@@ -28,14 +47,17 @@ leave required safety checks to free-form prompting."
 
 ## Why two MCP client implementations
 
-AgentSwitch's MCP transport/auth contract has not been confirmed against this
-repo (see `docs/open_items.md`, item 4 - this was flagged as an open item
-before any of this code was written, not discovered after). Rather than guess
-at a wire format:
+The captured OpenAPI contract specifies one JSON-RPC 2.0 POST per request at
+`/api/mcp`, bearer authentication, no SSE stream, and the standard MCP
+initialize/initialized handshake. `RealMCPClient` now implements that
+contract with the stdlib-only `JsonRpcTransport`. A live credentialed smoke
+test remains outstanding; the code is an implementation of the snapshot, not
+proof that a particular seat credential is configured correctly.
 
-- `RealMCPClient.call_tool` raises `NotImplementedError` with a clear pointer
-  to what's missing, so nothing pretends to talk to the live platform until
-  the contract is actually known.
+- `RealMCPClient` supports both known catalogue shapes. The default `generic`
+  surface uses the 13 seat tools (`list`, `report`, and so on), with the entity
+  in arguments. `entity_scoped` translates generic calls to names such as
+  `Deal.list`; unsupported generic operations fail loudly at the boundary.
 - `StubMCPClient` is a small, explicitly-labeled in-memory fixture (one
   `CRMPreferences` record, and a `PermissionDeniedError` on `Deal`/`Activity`
   matching the already-verified real refusal) that lets every other piece of
@@ -59,9 +81,9 @@ canonical request against `StubMCPClient` and produces a run folder under
 The trace in that run shows exactly two things: a successful `list(CRMPreferences)`
 (the harmless read) and a clean `refused` on `list(Deal)` (the sales-domain
 exclusion) - the same two outcomes independently verified against the live
-platform earlier in this project. Nothing here claims the live MCP integration
-itself has been proven; that step is still blocked on Gate G1 and the
-transport contract (`docs/open_items.md`, items 1 and 4).
+platform earlier in this project. Nothing here claims that a live MCP
+credential has been proven; that step is still blocked on Gate G1 and a
+credentialed smoke test (`docs/open_items.md`).
 
 ## Dependency stance
 
