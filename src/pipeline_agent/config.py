@@ -17,7 +17,13 @@ _SECRET_FIELDS = ("mcp_token",)
 # arguments); the standard MCP catalogue exposes entity-scoped names such as
 # ``Deal.list``.  This is deliberately a setting rather than a guess made by
 # the workflow.
-DEFAULT_MCP_TOOL_SURFACE = "generic"
+#
+# The default is what the seat 07 credential actually serves, measured with
+# ``--task preflight`` on 2026-09-21: 237 entity-scoped tools, no bare generic
+# names at all. The earlier ``generic`` default came from the captured
+# agent_tools.json and was simply wrong for this credential - every call was
+# rejected with "This tool is not available to your seat".
+DEFAULT_MCP_TOOL_SURFACE = "entity_scoped"
 
 
 @dataclass(frozen=True)

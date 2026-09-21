@@ -1,91 +1,111 @@
 # Open items
 
-Carried over from `capstone_plan.md` §3 (Gate G1) and §5. None of these are
-resolved by writing code - they need either a decision from the platform
-owner, a live smoke test against real credentials, or a human's own test
-authorship. Status here is honest about what's actually been checked, not
-what's merely been coded for.
+Status is honest about what has actually been checked against the live seat,
+not what has merely been coded for. Everything dated 2026-09-21 below was
+measured against the real `team07` credential on
+`https://agentswitch.theschoolofai.in`.
 
-## Gate G1 - charter/access mismatch (blocking full Track A)
+## Gate G1 - RESOLVED 2026-09-21
 
-**Status: unresolved.** Seat 07's charter requires `Deal`/`Activity`; its
-policy excludes the `sales` domain those entities live in. This repo's code
-already handles the situation correctly (`agent/workflow.run_canonical_task`
-returns a `RefusalResult`, never a fabricated answer), but "handles it
-correctly" and "resolved" are different things. The actual question - is the
-`sales` exclusion intentional, and should it change - still needs an answer
-from whoever owns this seat's policy config. Track A (the full three-part
-answer) cannot be implemented beyond what's here until that answer arrives
-and a live smoke test confirms `Deal.list`/`Activity.list` actually work.
+**The `sales` exclusion was not real.** The seat 07 credential reads `Deal`
+and `Activity` without complaint, and `--task preflight --mode live` reports
+`G1=sales_reachable` with all three probes green. The whole "charter requires
+a domain its policy excludes" blocker - which shaped this repo's design, its
+refusal path, and most of its earlier documentation - came from a single
+2026-09-18 observation made through a different door, and was wrong for this
+credential.
 
-**How to re-check it (new):** `--task preflight` now measures this rather
-than trusting the 2026-09-18 transcript. It probes `CRMPreferences`, `Deal`
-and `Activity` read-only and reports a `gate_g1` verdict of `sales_blocked`,
-`sales_reachable`, or `inconclusive`, flagging any drift from the recorded
-state as a `CHANGED:` line. Run it against a live credential the moment one
-exists; if it comes back `sales_reachable`, G1 is resolved and item 2 below
-becomes the next blocker.
+Two things followed from that, both now fixed:
 
-## Checklist (capstone_plan.md §5)
+- **Access on this platform is not domain-shaped.** A seat is scoped by which
+  tools appear in its `tools/list`. Refusals say *"This tool is not available
+  to your seat"* and never name a domain, which is why `EXCLUDED_DOMAINS` is
+  now empty and `PermissionDeniedError` phrases itself in terms of the tool
+  catalogue.
+- **The refusal detector missed the platform's actual refusal.** The
+  "not available to your seat" message matched none of the markers in
+  `_is_permission_denied`, so a genuine policy refusal arrived as a generic
+  `MCPToolError`: the workflow would never have built a `RefusalResult`, and
+  the loop's no-retry guard - which keys on `PermissionDeniedError` - would
+  never have engaged. Fixed and verified against `Invoice`, `SalarySlip` and
+  `Contract` (all refused) versus `Deal` (readable).
 
-1. **Resolve the `sales` access/charter mismatch (G1).** Unresolved - see above.
-2. **Live-smoke-test `report(Activity, max(due_date), group_by=deal_id, done=true)`.**
-   Not done. `agent/workflow.load_last_contacted_map` is written to this
-   documented shape but has never executed against a live server - it's
-   currently unreachable in dry-run because the `Deal` refusal short-circuits
-   first, and there's no live credential in this environment to test it with.
-3. **Reconcile whether `core` is genuinely accessible.** Not needed yet -
-   nothing in this codebase depends on the `core` domain. Revisit only if a
-   future design needs it.
-4. **Credentialed MCP smoke test.** The captured OpenAPI contract is now
-   implemented: JSON-RPC 2.0 POST to `/api/mcp`, bearer auth, no SSE, standard
-   initialize/initialized handshake. This remains **unverified against a live
-   seat credential**. `--task preflight --mode live` is now the one command
-   that performs this check: it runs the handshake, enumerates the catalogue,
-   and does the read-only `CRMPreferences` probe, all in one persisted run.
-   The catalogue shape no longer has to be configured correctly in advance -
-   preflight detects it and says so when `MCP_TOOL_SURFACE` disagrees.
-   `generic` is required for the canonical task's aggregate `Activity.report`;
-   `entity_scoped` cannot express it and intentionally fails closed.
-5. **Run `--task loop` against a real model.** The loop is now reachable
-   (`llm.py`, backends `anthropic:<model>` and `ollama:<model>`), and its
-   control flow is checked against a scripted stand-in model: a clean refusal,
-   a retry that correctly trips `MAX_REPEAT_DENIALS`, an allowed read, and an
-   unparseable reply. **Neither backend has issued a single real API call** -
-   no key and no local daemon in the environment where it was written. Run
-   each once before relying on it; the failure modes to expect are transport
-   (wrong host/key) rather than logic.
+## The surface was wrong too
 
-6. **Re-fetch full IDs/evidence for the two platform data-bug candidates
-   before filing** (malformed Pipeline stage records; the Goal
-   target/current_value anomaly). Not done in this repo - that work belongs
-   with the bug-filing effort tracked in `EAG_V3_capstone/bugs/mybugs.json`,
-   not here.
+The credential serves **237 entity-scoped tools** (`Deal.list`,
+`Activity.create`, `Deal.qualify`, ...), not the 13 generic tools in the
+captured `agent_tools.json`. `MCP_TOOL_SURFACE` now defaults to
+`entity_scoped`. Three concrete consequences, all measured:
 
-## What IS checked, as of 2026-09-19
+- **Filters are top-level arguments.** The entity-scoped schemas declare every
+  filter and writable field as a top-level property with
+  `additionalProperties: false`, so the generic surface's `filters` / `data`
+  envelopes are rejected with a bare *"Invalid tool arguments"*. `to_wire`
+  now unwraps them.
+- **There is no aggregate tool at all.** `report(Activity, max,
+  group_by=deal_id)` - the documented plan for "who has not been contacted" -
+  does not exist on this surface. Aggregation is now client-side over one
+  full `Activity` scan.
+- **`Activity.create` requires `subject`, `type` and `due_date`**, and rejects
+  unknown keys. The previous payload sent `stage` and `notes`, which are not
+  Activity fields, and omitted all three required ones - every write would
+  have failed.
 
-- The harness runs end-to-end against `StubMCPClient`: a harmless read
-  (`CRMPreferences`) and a clean refusal (`Deal`) both land correctly in a
-  persisted, `status=completed` run artifact under `runs/`. See
-  `docs/architecture.md`'s exit-condition section.
-- No write is attempted anywhere on the refusal path - confirmed by reading
-  the produced `result.json`, not by trusting the code's own claim.
-- `--task preflight --mode dry-run` produces a four-step trace (`tools/list`,
-  `list(CRMPreferences)` ok, `list(Deal)` refused, `list(Activity)` refused)
-  with `created_record_ids: []` and `claimed_success: false`. Checked
-  2026-09-21 by reading the artifact, not the code.
-- The same command against an unreachable host returns `gate_g1:
-  inconclusive`, not `sales_blocked` - a network fault must never be reported
-  as a policy refusal. Checked 2026-09-21.
-- `run_loop`'s refusal handling, under a scripted stand-in model: it stops a
-  retry of a denied call via `MAX_REPEAT_DENIALS`, and the offending model's
-  later `claimed_success: true` never reaches the artifact because the guard
-  trips first. Checked 2026-09-21.
+## Data findings worth filing as platform bugs
 
-## What this repo does NOT do (and shouldn't, yet)
+Neither is an agent bug; both change what a correct answer looks like.
 
-- Author the scored task matrix or its verifiers. Per the grading rubric, an
-  AI-authored test scores zero - `tasks/README.md` and `tests/README.md`
-  explain what's expected there and leave it to the human team member.
-- Treat the current transport implementation as live-proven before the
-  read-only credentialed smoke test in item 4 succeeds.
+1. **Two sources of truth for the rot threshold disagree.**
+   `GET /api/deal-rot-config` returns `default_rot_days: 14`;
+   `CRMPreferences.deal_rot_days` returns `30`. Nothing reconciles them, and
+   the computed `_rot_level` appears to follow neither directly (81 deals sit
+   at `attention` with `_rot_days: 8`).
+2. **`Activity.deal_id` is never populated.** 0 of 175 activities carry one;
+   all 175 carry `party_id`. Any deal-scoped contact reporting is therefore
+   silently empty rather than wrong-looking - this agent reported *every* deal
+   as never-contacted until the party fallback was added. 35 parties are
+   shared between deals and activities.
+
+`_rot_level`'s real vocabulary is `fresh` / `attention` / `none` (not
+`aging` / `stale`, which this repo filtered on and which never occur), and
+`none` is exactly the 49 closed deals.
+
+## Still open
+
+1. **Write mode has never been run.** Every live run so far is
+   `--exec-mode propose`. `create-next-actions` would write ~19 `Activity`
+   rows into a book shared with other teams, so it needs a human's go-ahead
+   and an agreed cleanup story before it runs once.
+2. **`NEXT_ACTION_DUE_DAYS = 3`, `NEXT_ACTION_TYPE = "task"`, and
+   `STAGE_ACTION_TEMPLATES` are unvalidated templates.** Nobody has confirmed
+   them against how Suryodaya actually works. They are named constants so the
+   guesses are visible rather than buried in a payload.
+3. **The party-level fallback is deliberately conservative.** If a party has
+   any open activity, the deal is reported as already actioned - which may
+   suppress a genuinely needed next action when one customer has several
+   deals. The basis (`deal` vs `party`) is in the evidence so a human can
+   overrule it; whether that tradeoff is right is a product decision.
+4. **Run `--task loop` against a real model.** The loop's control flow is
+   checked against a scripted stand-in (clean refusal, retry tripping
+   `MAX_REPEAT_DENIALS`, allowed read, unparseable reply), but neither the
+   `anthropic` nor the `ollama` backend has made a single real API call.
+5. **The scored task matrix and its verifiers remain unwritten, on purpose.**
+   Per the rubric an AI-authored test scores zero - see `tasks/README.md` and
+   `tests/README.md`.
+
+## What IS checked, as of 2026-09-21
+
+- `--task preflight --mode live`: 237 tools, surface `entity_scoped`,
+  `G1=sales_reachable`, canonical task READY, no probe drift.
+- `--task canonical --mode live --exec-mode propose`: 81 rotting deals from
+  133, in 3 tool calls and ~7s, `created_record_ids: []`. Contact split
+  74 never-contacted / 6 past threshold / 1 recent; action split 62 already
+  open / 19 recommended.
+- Credentials never reach disk: `config.json` in every live run artifact
+  shows `"mcp_token": "***redacted***"`.
+- The dry-run exercises all four decision paths offline (existing-by-party,
+  recommended, needs-human-review, and correct exclusion of fresh and closed
+  deals), and the stub refuses out-of-catalogue entities with the same
+  message the live platform produces.
+- A preflight against an unreachable host returns `gate_g1: inconclusive`,
+  never `sales_blocked` - a network fault is not a policy refusal.

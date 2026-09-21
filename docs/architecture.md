@@ -63,6 +63,29 @@ run with `ended="refused"`. A model that ignores the instruction and then
 claims success cannot produce a `claimed_success: true` artifact - the guard
 trips before its `done` action is ever read.
 
+## How the canonical answer is actually computed
+
+Three reads, then pure Python:
+
+1. `CRMPreferences.list` - the live `deal_rot_days` threshold.
+2. `Deal.list` (one page, 133 records) - `_rot_level` and `_rot_days` are
+   computed server-side and returned per record, but are **not** filterable
+   (absent from the tool's `inputSchema`), so selection is client-side.
+3. `Activity.list` (one full scan) - indexed by deal *and* by party.
+
+That third index is load-bearing rather than an optimisation. No live Activity
+carries a `deal_id`; all 175 carry a `party_id`. Indexing only by deal reports
+every deal as never-contacted, which is a statement about an unused foreign
+key, not about whether anyone called the customer. The linkage that proved
+each verdict travels into the evidence as `basis: deal | party | none`, because
+"no activity links to this deal" and "this customer has never been contacted"
+are different claims.
+
+Scanning once also removed an N+1: the per-deal version issued one
+`Activity.list` per candidate, which was 81 sequential round trips and a
+two-minute run. The re-read immediately before a write stays per-deal - that
+one is the concurrency guard, not a lookup.
+
 ## Why two MCP client implementations
 
 The captured OpenAPI contract specifies one JSON-RPC 2.0 POST per request at

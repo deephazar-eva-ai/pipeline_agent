@@ -16,15 +16,21 @@ for the full context this agent is built against.
 
 ## Status
 
-Implementing in phases per `capstone_plan.md` (kept outside this repo). As of
-2026-09-21: Phases 0, 1, 2, 4 have working code; Phase 3's mechanism is live
-(the sales-domain refusal is the actual, current behavior, not a placeholder);
-Phase 5 is deliberately left to a human team member. Gate G1 is still
-unresolved, but is now *measured* by `--task preflight` rather than asserted.
-The model-driven loop is reachable via `--task loop` with a pluggable backend
-(`anthropic:` or `ollama:`). Still outstanding: no live credential has ever
-exercised the JSON-RPC transport, and neither model backend has been run
-against a real model. Full status: `docs/open_items.md`.
+As of 2026-09-21 the agent answers the canonical question against the **live**
+Suryodaya book: 81 rotting deals out of 133, with contact status and a next
+action for each, in 3 tool calls and about 7 seconds.
+
+**Gate G1 is resolved.** The `sales`-domain blocker that shaped this repo's
+earlier design was not real - the seat reads `Deal` and `Activity` fine.
+Access here is scoped by the seat's tool catalogue, not by domain, and the
+credential serves 237 entity-scoped tools rather than the 13 generic ones in
+the captured snapshot. `docs/open_items.md` has the full list of what that
+invalidated and what it changed.
+
+Still outstanding: write mode (`--exec-mode create-next-actions`) has never
+been run against the shared live book, neither model backend has made a real
+API call, and the scored task matrix is deliberately left to a human team
+member. Full status: `docs/open_items.md`.
 
 ## Layout
 

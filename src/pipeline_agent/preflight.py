@@ -30,19 +30,25 @@ from pipeline_agent.mcp.tool_names import ENTITY_SCOPED, GENERIC
 
 UNKNOWN = "unknown"
 
-# Tools the canonical task cannot be completed without. `report` is the one
-# that matters: the entity-scoped catalogue has no counterpart for it, so a
-# credential on that surface cannot answer "who has not been contacted"
-# at all - see tool_names._NO_ENTITY_SCOPED_COUNTERPART.
-CANONICAL_TASK_TOOLS = ("list", "report", "create")
+# Tools the canonical task cannot be completed without, per surface. The
+# entity-scoped catalogue has no aggregate tool at all, so "who has not been
+# contacted" is aggregated client-side from Activity.list instead of asking
+# the server for a `report` - which is why `report` is not required here.
+CANONICAL_TASK_TOOLS = {
+    GENERIC: ("list", "create"),
+    ENTITY_SCOPED: ("Deal.list", "Activity.list", "Activity.create"),
+}
 
-# (entity, what Gate G1 as recorded on 2026-09-18 says to expect). The
-# expectation is recorded so the report can flag a CHANGE in the seat's policy
-# rather than quietly re-confirming a stale belief.
+# (entity, expected outcome). Measured against the live seat 07 credential on
+# 2026-09-21: all three are readable. This replaces the earlier expectation
+# that Deal/Activity would be refused - that came from a 2026-09-18 observation
+# through a different door and was wrong for this credential. The expectation
+# is recorded so a future policy change shows up as a CHANGED line rather than
+# quietly re-confirming a stale belief.
 PROBES: tuple[tuple[str, str], ...] = (
     ("CRMPreferences", "ok"),
-    ("Deal", "refused"),
-    ("Activity", "refused"),
+    ("Deal", "ok"),
+    ("Activity", "ok"),
 )
 
 SALES_ENTITIES = ("Deal", "Activity")
@@ -127,18 +133,15 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
         names = [t.get("name", "") for t in tools if isinstance(t, dict)]
         report.tool_count = len(names)
         report.detected_surface = detect_surface(names)
+        present = set(names)
+        required = CANONICAL_TASK_TOOLS.get(report.detected_surface, ())
+        report.missing_canonical_tools = [t for t in required if t not in present]
         if report.detected_surface == GENERIC:
-            present = set(names) & KNOWN_TOOLS
-            report.missing_canonical_tools = [t for t in CANONICAL_TASK_TOOLS if t not in present]
-            report.unexpected_generic_tools = sorted(set(names) - KNOWN_TOOLS)
+            report.unexpected_generic_tools = sorted(present - KNOWN_TOOLS)
         elif report.detected_surface == ENTITY_SCOPED:
-            # The aggregate report has no entity-scoped counterpart at all, so
-            # this surface cannot express the canonical task however many tools
-            # it carries.
-            report.missing_canonical_tools = ["report"]
             report.notes.append(
-                "entity-scoped catalogue: the aggregate `report` tool required by "
-                "'who has not been contacted' is not expressible on this surface")
+                "entity-scoped catalogue: no aggregate tool exists on this surface, so "
+                "'who has not been contacted' is aggregated client-side from Activity.list")
         if report.detected_surface != configured_surface and report.detected_surface != UNKNOWN:
             report.notes.append(
                 f"MCP_TOOL_SURFACE is set to {configured_surface!r} but the credential "

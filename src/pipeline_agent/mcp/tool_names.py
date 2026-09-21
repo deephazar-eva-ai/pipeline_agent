@@ -85,6 +85,18 @@ def to_wire(surface: str, name: str, arguments: dict) -> tuple[str, dict]:
         raise SurfaceError(f"tool {name!r} needs an entity to name an entity-scoped tool")
 
     wire_arguments = {k: v for k, v in arguments.items() if k != "entity"}
+
+    # The entity-scoped tools declare every filter and every writable field as
+    # a TOP-LEVEL property, with "additionalProperties": false. The generic
+    # surface wraps those in `filters` / `data` envelopes, so passing them
+    # through unchanged is rejected with a bare "Invalid tool arguments".
+    # Confirmed against the live inputSchema for Activity.list, Activity.create
+    # and Activity.update on 2026-09-21.
+    for envelope in ("filters", "data"):
+        nested = wire_arguments.pop(envelope, None)
+        if isinstance(nested, dict):
+            wire_arguments.update(nested)
+
     return f"{entity}.{suffix}", wire_arguments
 
 

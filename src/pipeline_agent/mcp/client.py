@@ -23,11 +23,14 @@ KNOWN_TOOLS = frozenset({
     "search", "count", "make_from", "bulk_update", "report", "financial_report",
 })
 
-# Domains this seat's policy is known to exclude. `sales` is the one that
-# actually blocks the canonical task (Deal/Activity live there) - see
-# docs/open_items.md item 1 / capstone_scope.md Gate G1. Kept as data, not a
-# hardcoded branch, so a policy change only requires updating this set.
-EXCLUDED_DOMAINS = frozenset({"sales"})
+# Domains this seat's policy excludes. Empty, measured: `sales` was listed
+# here on the strength of a 2026-09-18 observation, but the live seat 07
+# credential reads Deal and Activity fine (Gate G1, resolved 2026-09-21).
+# Access is not actually domain-shaped on this platform - the seat is scoped
+# by which tools appear in its `tools/list`, which is why refusals say "not
+# available to your seat" rather than naming a domain. Kept as data so the
+# stub can still simulate an exclusion without a hardcoded branch.
+EXCLUDED_DOMAINS: frozenset[str] = frozenset()
 
 # Which domain each entity this agent cares about lives in. Deliberately small
 # and explicit rather than derived from schemas.json at runtime - this repo
@@ -66,8 +69,10 @@ class PermissionDeniedError(MCPToolError):
     """
 
     def __init__(self, tool: str, entity: str, domain: str, *, raw: Any = None):
-        super().__init__(tool, f"entity '{entity}' is in domain '{domain}', "
-                                f"outside this seat's policy scope", entity=entity, raw=raw)
+        detail = (f"entity '{entity}' is in domain '{domain}', outside this seat's policy scope"
+                  if domain and domain != "unknown"
+                  else f"entity '{entity}' is not in this seat's tool catalogue")
+        super().__init__(tool, detail, entity=entity, raw=raw)
         self.domain = domain
 
 

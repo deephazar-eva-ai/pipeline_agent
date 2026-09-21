@@ -30,6 +30,14 @@ def _is_permission_denied(exc: Exception) -> bool:
     markers = (
         "permission denied", "access denied", "forbidden", "not authorized", "unauthorized",
         "outside this seat's policy", "outside policy scope",
+        # What AgentSwitch actually says when a tool is outside the seat's
+        # catalogue, measured 2026-09-21 against Invoice/SalarySlip/Contract:
+        #   -32602 "This tool is not available to your seat; it is not in your
+        #    tools/list. Re-fetch tools/list for the tools you may call."
+        # Without this the platform's own refusal arrives as a generic
+        # MCPToolError, the workflow never builds a RefusalResult, and the
+        # loop's no-retry guard never engages - it keys on PermissionDeniedError.
+        "not available to your seat",
     )
     # A 401 means a bad or expired credential, not a policy refusal. Treating
     # it as the latter would say Deal data is unavailable when the agent was
