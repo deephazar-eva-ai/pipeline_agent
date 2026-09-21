@@ -120,7 +120,8 @@ async def main_async(args: argparse.Namespace) -> int:
                 result = await run_preflight(RecordingMCPClient(client, run.steps),
                                               configured_surface=settings.mcp_tool_surface)
             else:
-                request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode))
+                request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode),
+                                        max_deals=args.limit, deal_ids=args.deal_id or None)
                 result = await run_canonical_task(RecordingMCPClient(client, run.steps),
                                                    request, run_id=run_id)
         except Exception as exc:
@@ -159,6 +160,14 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=12,
                          help="maximum model turns for --task loop.")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")
+    parser.add_argument("--limit", type=int, default=None,
+                         help="act on at most N candidate deals, worst-rot first. Use it to "
+                              "smoke-test a write on one deal before letting it loose on a "
+                              "shared book; the answer reports the run as PARTIAL.")
+    parser.add_argument("--deal-id", action="append", default=[],
+                         help="restrict the run to this deal id (repeatable). The precise "
+                              "instrument for a targeted write; matches setup.deal_ids in "
+                              "tasks/task_schema.json.")
     parser.add_argument("--request", default=CANONICAL_REQUEST)
     args = parser.parse_args()
     return asyncio.run(main_async(args))

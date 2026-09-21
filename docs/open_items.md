@@ -70,12 +70,42 @@ Neither is an agent bug; both change what a correct answer looks like.
 `aging` / `stale`, which this repo filtered on and which never occur), and
 `none` is exactly the 49 closed deals.
 
+## Writing a next action resets the signal that detected the rot
+
+Measured on the 2026-09-21 smoke test: creating one `Activity` against deal
+`7de1dd77` moved it from `_rot_level: attention, _rot_days: 8` to
+`fresh, 0`, and the candidate count dropped 81 -> 80. So `_rot_days` tracks
+days since the last linked activity, not days in stage - which also explains
+why 81 deals sat at exactly 8 days (none had any linked activity, and the
+book was seeded 8 days ago).
+
+**This is a feedback loop, and it is the most dangerous thing found so far.**
+The agent's own bookkeeping makes a deal look healthy. Logging a task is not
+the same as contacting a customer, so a scheduled run of this agent would
+quietly launder every rotting deal into `fresh` without a human ever speaking
+to anyone. Two consequences:
+
+- Re-running the agent is idempotent for a reason that has nothing to do with
+  the idempotency guard: the deal simply stops being a candidate. The guard
+  was therefore *not* exercised on live data by the re-run - the deal fell out
+  of the candidate set first, which the run reported honestly as
+  "requested deal(s) not among the rotting candidates".
+- Before write mode is used at scale, rot needs a definition that does not
+  reset on the agent's own writes - e.g. ignore activities whose description
+  carries the `created_by=pipeline_agent` provenance marker, or key rot off
+  `done=true` activities only (a completed touchpoint), not open ones.
+
 ## Still open
 
-1. **Write mode has never been run.** Every live run so far is
-   `--exec-mode propose`. `create-next-actions` would write ~19 `Activity`
-   rows into a book shared with other teams, so it needs a human's go-ahead
-   and an agreed cleanup story before it runs once.
+1. **Write mode has run exactly once, on one deal, with consent.** Deal
+   `7de1dd77` got Activity `1ca85e7b` on 2026-09-21. Verified by reading the
+   platform back, not the artifact: the book went 175 -> 176 activities,
+   exactly one is linked to that deal, and exactly one row in the whole book
+   carries the `created_by=pipeline_agent` provenance marker. The remaining
+   18 recommended deals are untouched, pending the rot-feedback-loop fix
+   above. Note `Activity._permissions.delete` is `false` for this seat, so
+   agent-created rows cannot be removed by the agent - cleanup needs someone
+   with delete rights.
 2. **`NEXT_ACTION_DUE_DAYS = 3`, `NEXT_ACTION_TYPE = "task"`, and
    `STAGE_ACTION_TEMPLATES` are unvalidated templates.** Nobody has confirmed
    them against how Suryodaya actually works. They are named constants so the

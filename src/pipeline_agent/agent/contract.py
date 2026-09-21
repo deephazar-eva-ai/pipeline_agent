@@ -43,6 +43,15 @@ class AgentRequest:
     team: str | None = None
     since: str | None = None
     mode: ExecutionMode = ExecutionMode.PROPOSE
+    # Cap on how many candidate deals to act on, worst-rot first. Exists so a
+    # write can be smoke-tested on one deal against a shared book. A capped
+    # run reports `candidates_found` alongside the deals it analyzed, so a
+    # partial answer can never read as a complete one.
+    max_deals: int | None = None
+    # Restrict the run to specific deals. Matches `setup.deal_ids` in
+    # tasks/task_schema.json - a task owns the records it touches, so a
+    # verifier can clean up only what it created.
+    deal_ids: list[str] | None = None
 
 
 @dataclass
@@ -69,6 +78,10 @@ class CanonicalAnswer:
     deals: list[DealResult]
     summary: str
     unavailable_note: str = ""
+    # How many deals matched the rotting criteria in total. Equal to
+    # len(deals) on a full run; larger when the run was capped via
+    # AgentRequest.max_deals.
+    candidates_found: int = 0
 
 
 @dataclass

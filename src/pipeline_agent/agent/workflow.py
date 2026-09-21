@@ -290,6 +290,25 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                               tools_attempted=["list(Deal)", "list(Activity)"])
 
     now = dt.datetime.now(dt.timezone.utc)
+
+    # Worst-rot first, so a capped run acts on the deals that matter most
+    # rather than whatever the server happened to return first.
+    deals.sort(key=lambda d: d.get("_rot_days") or 0, reverse=True)
+    candidates_found = len(deals)
+    scope_notes: list[str] = []
+
+    if request.deal_ids:
+        wanted = set(request.deal_ids)
+        deals = [d for d in deals if d.get("id") in wanted]
+        missing = wanted - {d.get("id") for d in deals}
+        if missing:
+            # Silence here would read as "these deals are fine". They were
+            # asked for and are not in the candidate set - say which.
+            scope_notes.append(f"requested deal(s) not among the rotting candidates: "
+                                f"{', '.join(sorted(missing))}")
+    if request.max_deals is not None:
+        deals = deals[:request.max_deals]
+
     results: list[DealResult] = []
     for deal in deals:
         last_contacted, basis = index.last_contacted(deal)
@@ -306,9 +325,17 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
 
     results.sort(key=lambda r: r.rot_evidence.get("_rot_days") or 0, reverse=True)
     threshold_note = "" if used_live else "CRMPreferences.deal_rot_days unavailable - used schema default"
-    summary = (f"{len(results)} rotting deal(s) found, threshold={threshold} days. "
+
+    scope = (f"{candidates_found} rotting deal(s) found, threshold={threshold} days."
+             if len(results) == candidates_found else
+             f"{candidates_found} rotting deal(s) found, threshold={threshold} days - "
+             f"PARTIAL RUN: analyzed {len(results)} of them (--limit/--deal-id).")
+    if scope_notes:
+        scope += " " + "; ".join(scope_notes) + "."
+    summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
                f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open.")
 
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
-                            deals=results, summary=summary, unavailable_note=threshold_note)
+                            deals=results, summary=summary, unavailable_note=threshold_note,
+                            candidates_found=candidates_found)
