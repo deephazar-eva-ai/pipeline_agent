@@ -16,21 +16,31 @@ for the full context this agent is built against.
 
 ## Status
 
-As of 2026-09-21 the agent answers the canonical question against the **live**
+As of 2026-09-22 the agent answers the canonical question against the **live**
 Suryodaya book: 81 rotting deals out of 133, with contact status and a next
-action for each, in 3 tool calls and about 7 seconds.
+action for each, in 3 tool calls and about 9 seconds.
+
+**The rot-feedback loop is fixed.** The platform computes a deal's rot from
+the time since its last linked Activity - including Activities *this agent
+creates* - so writing a next action made a rotting deal read as `fresh` and
+drop out of the agent's own report. The agent now recomputes rot with its own
+rows excluded, reports both numbers side by side, and warns loudly on any deal
+that only looks healthy because the agent wrote to it. See
+`docs/open_items.md` for the derivation and the live before/after.
 
 **Gate G1 is resolved.** The `sales`-domain blocker that shaped this repo's
 earlier design was not real - the seat reads `Deal` and `Activity` fine.
 Access here is scoped by the seat's tool catalogue, not by domain, and the
-credential serves 237 entity-scoped tools rather than the 13 generic ones in
-the captured snapshot. `docs/open_items.md` has the full list of what that
+credential serves 238 entity-scoped tools rather than the 13 generic ones in
+the captured snapshot (237 on 2026-09-21 - the catalogue moved, which is why
+preflight now baselines it). `docs/open_items.md` has the full list of what that
 invalidated and what it changed.
 
-Still outstanding: write mode (`--exec-mode create-next-actions`) has never
-been run against the shared live book, neither model backend has made a real
-API call, and the scored task matrix is deliberately left to a human team
-member. Full status: `docs/open_items.md`.
+Still outstanding: write mode (`--exec-mode create-next-actions`) has run
+exactly once, on one deal, with consent - not at scale; the measured rot
+boundary is a range (`[5, 9]` days) rather than a number; neither model
+backend has made a real API call; and the scored task matrix is deliberately
+left to a human team member. Full status: `docs/open_items.md`.
 
 ## Layout
 
@@ -74,11 +84,15 @@ a re-runnable measurement of Gate G1 rather than a remembered result. It flags
 drift from the recorded state explicitly:
 
 ```
-surface=generic, tools=13, G1=sales_blocked, canonical task BLOCKED
+surface=entity_scoped, tools=238, G1=sales_reachable, canonical task READY
   CRMPreferences   crm      ok: readable
-  Deal             sales    refused: entity 'Deal' is in domain 'sales', ...
-  Activity         sales    refused: entity 'Activity' is in domain 'sales', ...
+  Deal             sales    ok: readable
+  Activity         sales    ok: readable
 ```
+
+It also compares the catalogue against a recorded baseline and prints a
+`CHANGED:` line if the seat's tool set has moved - on this platform the tool
+catalogue *is* the access boundary, so it is not allowed to change quietly.
 
 The default `--task canonical` runs the canonical request against
 `StubMCPClient` - no credentials needed.
@@ -100,8 +114,9 @@ human-authored - see `tasks/README.md`.
 Produces a run folder under `runs/`. `--mode live` requires
 `AGENTSWITCH_MCP_URL`/`AGENTSWITCH_MCP_TOKEN` (copy `.env.example` to `.env`)
 uses JSON-RPC POST at `/api/mcp`; a credentialed smoke test remains required.
-Set `MCP_TOOL_SURFACE=generic` for the seat's 13 generic tools (the default),
-or `entity_scoped` for a standard MCP catalogue exposing names such as
-`Deal.list`. The latter does not expose the aggregate `report` tool required
-by the canonical task, so it fails closed at that point rather than producing
-an incomplete answer.
+`MCP_TOOL_SURFACE` defaults to `entity_scoped`, which is what the seat 07
+credential actually serves (238 tools named `Deal.list`, `Activity.create`,
+...). Set it to `generic` only for a credential exposing the 13 generic tools
+from the captured `agent_tools.json`. The entity-scoped surface has no
+aggregate `report` tool at all, so "who has not been contacted" is aggregated
+client-side from a single `Activity.list` scan.

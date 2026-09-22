@@ -48,6 +48,18 @@ ENTITY_DOMAIN = {
 }
 
 
+def _refusal_cites_domain(domain: str, raw: Any) -> bool:
+    """Did the platform itself blame a domain, or did we merely assume one?
+
+    Access on AgentSwitch is scoped by the seat's tool catalogue: refusals say
+    a tool is not in `tools/list` and never name a domain. So a domain-shaped
+    message is only honest when the server's own text carries that domain.
+    """
+    if not domain or domain == "unknown":
+        return False
+    return "domain" in str(raw or "").lower() and domain.lower() in str(raw or "").lower()
+
+
 class MCPToolError(Exception):
     """A tool call failed. Carries enough to log and to explain to a human."""
 
@@ -69,11 +81,23 @@ class PermissionDeniedError(MCPToolError):
     """
 
     def __init__(self, tool: str, entity: str, domain: str, *, raw: Any = None):
-        detail = (f"entity '{entity}' is in domain '{domain}', outside this seat's policy scope"
-                  if domain and domain != "unknown"
-                  else f"entity '{entity}' is not in this seat's tool catalogue")
-        super().__init__(tool, detail, entity=entity, raw=raw)
+        # The wording is decided by what the platform actually said, not by
+        # this repo's ENTITY_DOMAIN table. Measured 2026-09-22: `get_schema`
+        # is outside the seat's catalogue, and AgentSwitch refuses it with
+        # "This tool is not available to your seat". Preferring the domain
+        # phrasing whenever a domain was known turned that into "entity
+        # 'Activity' is in domain 'sales', outside this seat's policy scope" -
+        # a claim flatly contradicted by the preflight run one minute earlier,
+        # which read Activity fine. A refusal that misreports why it refused
+        # is worse than no message: it re-creates the Gate G1 error that
+        # already cost this repo a redesign.
         self.domain = domain
+        self.cites_domain = _refusal_cites_domain(domain, raw)
+        detail = (f"entity '{entity}' is in domain '{domain}', outside this seat's policy scope"
+                  if self.cites_domain
+                  else f"tool '{tool}' is not available to this seat for entity "
+                       f"'{entity}' - it is not in the seat's tools/list")
+        super().__init__(tool, detail, entity=entity, raw=raw)
 
 
 @dataclass

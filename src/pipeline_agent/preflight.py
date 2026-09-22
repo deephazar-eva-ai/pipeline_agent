@@ -53,12 +53,27 @@ PROBES: tuple[tuple[str, str], ...] = (
 
 SALES_ENTITIES = ("Deal", "Activity")
 
+# Size of the catalogue this credential last served. Recorded so the catalogue
+# is *measured against a baseline* rather than merely printed - the number was
+# 237 on 2026-09-21 and 238 on 2026-09-22, and nothing said a word, because
+# nothing was comparing. A seat whose tool catalogue is its access-control
+# boundary cannot have that boundary move unobserved; that is the same class of
+# mistake as trusting the remembered Gate G1 result.
+#
+# Update this deliberately, with the date, when a change is understood.
+RECORDED_TOOL_COUNT = 238
+
 
 @dataclass
 class PreflightReport:
     configured_surface: str
     detected_surface: str = UNKNOWN
     tool_count: int | None = None
+    # The names themselves, persisted into the run artifact so the NEXT run can
+    # say which tool appeared or vanished, not just that the count moved. The
+    # 237 -> 238 change could not be attributed after the fact because no run
+    # had kept the list.
+    tool_names: list[str] = field(default_factory=list)
     missing_canonical_tools: list[str] = field(default_factory=list)
     unexpected_generic_tools: list[str] = field(default_factory=list)
     probes: list[dict] = field(default_factory=list)
@@ -132,6 +147,15 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
     else:
         names = [t.get("name", "") for t in tools if isinstance(t, dict)]
         report.tool_count = len(names)
+        report.tool_names = sorted(names)
+        # Scoped to the surface the baseline was taken on. The stub serves 13
+        # generic tools by design, and reporting that as "the access boundary
+        # moved" would train a reader to ignore the one line that matters.
+        if report.detected_surface == ENTITY_SCOPED and report.tool_count != RECORDED_TOOL_COUNT:
+            report.changes_from_recorded_state.append(
+                f"tool catalogue size {report.tool_count}, recorded {RECORDED_TOOL_COUNT} - "
+                f"this seat's access boundary moved; diff tool_names against an earlier "
+                f"run artifact and update RECORDED_TOOL_COUNT once the change is understood")
         report.detected_surface = detect_surface(names)
         present = set(names)
         required = CANONICAL_TASK_TOOLS.get(report.detected_surface, ())

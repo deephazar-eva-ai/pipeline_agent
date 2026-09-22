@@ -36,11 +36,56 @@ DEFAULT_ROT_DAYS = 30  # schema default; overridden by the live CRMPreferences v
 NEXT_ACTION_DUE_DAYS = 3
 NEXT_ACTION_TYPE = "task"
 
+# Written into the description of every Activity this agent creates. Load
+# bearing, not cosmetic: the rot recomputation below excludes rows carrying
+# it, and that exclusion is the only thing stopping the agent from laundering
+# its own bookkeeping into "fresh". Changing this string silently disarms
+# `independent_rot_days`, so it lives here and is referenced, never retyped.
+PROVENANCE_MARKER = "created_by=pipeline_agent"
+
 # Observed `_rot_level` values, measured across all 133 live deals on
 # 2026-09-21: only `fresh`, `attention` and `none` occur. `none` is exactly
 # the 49 closed deals - the level is not computed for closed pipeline.
 ROT_LEVEL_FRESH = "fresh"
 ROT_LEVEL_NOT_APPLICABLE = "none"
+
+# How the platform actually computes `_rot_days`, derived on 2026-09-22 by
+# reproducing it rather than by reading any documentation:
+#
+#     _rot_days == (now - max(deal.updated_at,
+#                             latest Activity.created_at linked to the deal)).days
+#
+# Zero mismatches across all 84 open deals. `Activity.due_date` is ruled out -
+# it mismatches on exactly one deal, the one this agent wrote to. Closed deals
+# are pinned at `_rot_days=0` / `_rot_level='none'` regardless of true age
+# (theirs ranges 4..9 days on this book), which is why closed state is read off
+# the stage and never inferred from the level.
+#
+# That formula is the whole reason this module recomputes rot instead of
+# trusting the platform: an Activity the AGENT creates is a linked Activity,
+# so the agent's own write resets the very signal that selected the deal.
+# Measured across two days on deal 7de1dd77: `attention`/8 on 2026-09-21, one
+# agent-logged task, then `fresh`/0 on 2026-09-22 while every untouched peer
+# aged 8 -> 9. Nobody contacted that customer. Logging a task is not contact,
+# and an agent that trusts `_rot_level` will quietly launder its whole book.
+
+# Used only when the live book offers nothing to calibrate against (see
+# `calibrate_rot_boundary`). Deliberately low: over-reporting a deal as
+# needing attention is recoverable, hiding a rotting one is not.
+ROT_BOUNDARY_FALLBACK = 5
+
+
+def _parse_ts(value: Any) -> dt.datetime | None:
+    """Platform timestamps are naive ISO (`2026-09-12T17:19:56.312557`) while
+    `now` is tz-aware UTC; subtracting the two raises rather than misreports,
+    so naive values are read as UTC explicitly."""
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=dt.timezone.utc) if parsed.tzinfo is None else parsed
 
 # Template only - NOT validated against live Suryodaya stage names yet
 # (capstone_plan.md Phase 2, step 3: "Examples must remain templates until
@@ -66,39 +111,150 @@ async def load_rot_threshold(client: MCPClient) -> tuple[int, bool]:
     return DEFAULT_ROT_DAYS, False
 
 
-def is_rotting(deal: dict, threshold_days: int) -> bool:
-    """Two independent signals, either of which makes a deal a candidate.
+def is_agent_authored(activity: dict) -> bool:
+    """Did this agent create this Activity? The provenance marker in
+    `description` is the only handle available - `created_by` holds the seat's
+    user id, which is shared with every human using the same credential."""
+    return PROVENANCE_MARKER in str(activity.get("description") or "")
 
-    Measured vocabulary, not assumed: across all 133 live deals on 2026-09-21
-    `_rot_level` only ever takes the values `fresh`, `attention` and `none` -
-    the `aging`/`stale` values this code previously filtered on do not occur,
-    so it matched nothing and reported zero rotting deals on a book where the
-    platform itself was flagging 81. `none` is exactly the closed deals
-    (49/49), which is why closed state is read off the stage rather than
-    inferred from the level.
 
-    Rather than hard-code a level vocabulary that may grow again, anything the
-    platform does not call `fresh` counts as a concern, and the numeric
-    `_rot_days` is checked independently against the configured threshold.
+def independent_rot_days(deal: dict, index: ActivityIndex,
+                          now: dt.datetime) -> int | None:
+    """`_rot_days` recomputed from inputs this agent has not touched.
+
+    Same formula the platform uses (derived above), with one change: Activity
+    rows carrying the provenance marker are excluded. On an untouched deal
+    this returns exactly the platform's number; on a deal the agent has
+    written to it returns what the platform *would* have said had the agent
+    kept its hands off. That difference is the laundering.
     """
+    basis = max([ts for ts in (_parse_ts(deal.get("updated_at")),
+                                _parse_ts(index.last_touch_by_deal.get(deal.get("id"))))
+                 if ts is not None], default=None)
+    return None if basis is None else (now - basis).days
+
+
+@dataclass
+class RotCalibration:
+    """Where the platform draws the `fresh` -> `attention` line.
+
+    Nothing exposes it. `GET /api/deal-rot-config` says `default_rot_days: 14`
+    and `CRMPreferences.deal_rot_days` says `30`; the observed flip happens at
+    neither, so both are reported as context and neither is used as the line.
+    It is measured instead, from deals the agent has never written to - the
+    only deals whose level is still trustworthy.
+    """
+
+    boundary_days: int
+    lower: int | None = None
+    upper: int | None = None
+    exact: bool = False
+    basis: str = ""
+
+    def note(self) -> str:
+        if self.exact:
+            return (f"rot boundary measured exactly at {self.boundary_days} days "
+                    f"({self.basis})")
+        if self.lower is not None:
+            return (f"rot boundary lies in [{self.lower}, {self.upper}] days and is not "
+                    f"pinned down by this book; using the conservative lower bound "
+                    f"{self.boundary_days} ({self.basis})")
+        return f"rot boundary not measurable: using {self.boundary_days} ({self.basis})"
+
+
+def calibrate_rot_boundary(deals: list[dict], index: ActivityIndex, now: dt.datetime,
+                            fallback: int = ROT_BOUNDARY_FALLBACK) -> RotCalibration:
+    """Bracket the boundary between the oldest `fresh` deal and the youngest
+    flagged one, using only deals with no agent-authored activity.
+
+    The bracket is usually a range, not a point - on 2026-09-22 the live book
+    gives [5, 9], because no deal happens to sit in the gap. The lower bound is
+    taken: at the boundary the choice is between showing a human a deal that
+    turned out to be fine and hiding one that is rotting, and only one of those
+    is recoverable. A run says which it used, so nobody has to guess.
+    """
+    fresh_days: list[int] = []
+    flagged_days: list[int] = []
+    for deal in deals:
+        if deal.get("_rot_level") == ROT_LEVEL_NOT_APPLICABLE:
+            continue
+        if deal.get("id") in index.agent_written_deals:
+            continue  # its level is exactly what we do not trust
+        days = independent_rot_days(deal, index, now)
+        if days is None:
+            continue
+        (fresh_days if deal.get("_rot_level") == ROT_LEVEL_FRESH
+         else flagged_days).append(days)
+
+    if not fresh_days or not flagged_days:
+        return RotCalibration(boundary_days=fallback, basis=(
+            f"no usable calibration pair (fresh n={len(fresh_days)}, "
+            f"flagged n={len(flagged_days)})"))
+
+    lower, upper = max(fresh_days) + 1, min(flagged_days)
+    basis = (f"oldest fresh deal {max(fresh_days)}d, youngest flagged deal {upper}d, "
+             f"over {len(fresh_days) + len(flagged_days)} agent-untouched deals")
+    return RotCalibration(boundary_days=min(lower, upper), lower=lower, upper=upper,
+                           exact=lower == upper, basis=basis)
+
+
+def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
+                calibration: RotCalibration) -> tuple[bool, dict]:
+    """Is this deal rotting, and on what evidence?
+
+    Two signals, reported side by side rather than collapsed: what the platform
+    says, and what the platform would say if this agent had never written to
+    the deal. Either one is enough to make it a candidate - which is the fix
+    for the feedback loop, because the recomputed signal does not reset when
+    the agent logs a task.
+    """
+    evidence: dict[str, Any] = {
+        "_rot_level": deal.get("_rot_level"),
+        "_rot_days": deal.get("_rot_days"),
+    }
     if str(deal.get("stage", "")).startswith("closed"):
-        return False
-    if (deal.get("_rot_days") or 0) >= threshold_days:
-        return True
-    return deal.get("_rot_level") not in (ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
+        # Closed deals read as `none`/0 no matter how old they are, so the
+        # stage is the only honest test.
+        evidence["excluded"] = "closed stage"
+        return False, evidence
+
+    days = independent_rot_days(deal, index, now)
+    platform_flags = deal.get("_rot_level") not in (ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
+    independently_flags = days is not None and days >= calibration.boundary_days
+
+    evidence.update({
+        "independent_rot_days": days,
+        "rot_boundary_days": calibration.boundary_days,
+        "last_non_agent_touch": index.last_touch_by_deal.get(deal.get("id")),
+        "platform_flags": platform_flags,
+        "independently_flags": independently_flags,
+    })
+    if independently_flags and not platform_flags:
+        # The headline finding. Say it in the evidence, in words, on the row
+        # it applies to - not only in an aggregate at the bottom of a report.
+        evidence["agent_write_suppressed_platform_signal"] = True
+        evidence["note"] = (
+            f"the platform reads this deal as '{deal.get('_rot_level')}' only because this "
+            f"agent logged an Activity against it; with the agent's own rows excluded it "
+            f"has been untouched for {days} days and nobody has contacted the customer")
+    return platform_flags or independently_flags, evidence
 
 
-async def load_candidate_deals(client: MCPClient, threshold_days: int) -> list[dict]:
-    """Every open deal the platform or the threshold flags as rotting.
+async def load_deals(client: MCPClient) -> list[dict]:
+    """Every deal, unfiltered.
 
     `Deal.list` has no server-side filter on `_rot_level`/`_rot_days` (they are
-    computed at read time and absent from the tool's inputSchema), so the
-    selection happens client-side. Fine at 133 deals; `limit` maxes out at
-    1000, which is the point where this needs paging.
+    computed at read time and absent from the tool's inputSchema), so selection
+    happens client-side - and it now has to, because the selection needs the
+    Activity index to recompute rot, which is not loaded yet at this point.
+    Fine at 133 deals; `limit` maxes out at 1000, which is where this needs
+    paging.
+
+    The full list is kept rather than filtered here: `calibrate_rot_boundary`
+    needs the deals that are NOT rotting to find the boundary.
     """
     resp = await client.list_("Deal", limit=1000)
-    records = resp.get("records", []) if isinstance(resp, dict) else []
-    return [d for d in records if is_rotting(d, threshold_days)]
+    return resp.get("records", []) if isinstance(resp, dict) else []
 
 
 @dataclass
@@ -121,6 +277,11 @@ class ActivityIndex:
     last_done_by_party: dict[str, str] = field(default_factory=dict)
     open_by_deal: dict[str, dict] = field(default_factory=dict)
     open_by_party: dict[str, dict] = field(default_factory=dict)
+    # Latest `created_at` of a deal-linked Activity this agent did NOT write.
+    # Mirrors the platform's own rot input with the agent's contribution
+    # removed - see the derivation note at the top of this module.
+    last_touch_by_deal: dict[str, str] = field(default_factory=dict)
+    agent_written_deals: set[str] = field(default_factory=set)
     scanned: int = 0
 
     def last_contacted(self, deal: dict) -> tuple[str | None, str]:
@@ -132,13 +293,20 @@ class ActivityIndex:
             return self.last_done_by_party[party_id], "party"
         return None, "none"
 
-    def open_activity(self, deal: dict) -> tuple[dict | None, str]:
+    def open_activity(self, deal: dict) -> tuple[dict | None, str, bool]:
+        """The open action, which linkage found it, and whether this agent
+        wrote it. The third value exists because "somebody is on this" and
+        "the agent left itself a note" look identical in the data and mean
+        opposite things to the human reading the report."""
         deal_id, party_id = deal.get("id"), deal.get("party_id")
         if deal_id and deal_id in self.open_by_deal:
-            return self.open_by_deal[deal_id], "deal"
+            activity = self.open_by_deal[deal_id]
+            return activity, "deal", is_agent_authored(activity)
         if party_id and party_id in self.open_by_party:
-            return self.open_by_party[party_id], "party"
-        return None, "none"
+            # Agent-created rows carry no party_id (measured: the one this
+            # agent wrote has party_id=None), so this branch is always human.
+            return self.open_by_party[party_id], "party", False
+        return None, "none", False
 
 
 async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> ActivityIndex:
@@ -162,6 +330,20 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> Ac
         for activity in records:
             deal_id, party_id = activity.get("deal_id"), activity.get("party_id")
             due = activity.get("due_date")
+
+            # Rot bookkeeping, kept separate from contact bookkeeping below.
+            # Only deal-linked rows matter here: the platform's `_rot_days`
+            # ignores party-linked activity entirely (81 deals sat at the full
+            # age of their `updated_at` despite their parties having activity),
+            # so mirroring it means mirroring that too.
+            authored_by_agent = is_agent_authored(activity)
+            if deal_id and authored_by_agent:
+                index.agent_written_deals.add(deal_id)
+            created = activity.get("created_at")
+            if deal_id and created and not authored_by_agent:
+                if str(created) > index.last_touch_by_deal.get(deal_id, ""):
+                    index.last_touch_by_deal[deal_id] = str(created)
+
             if activity.get("done"):
                 # ISO dates (YYYY-MM-DD) compare correctly as strings.
                 if deal_id and due and due > index.last_done_by_deal.get(deal_id, ""):
@@ -219,9 +401,19 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
     deal_id = deal["id"]
     reasons: list[str] = []
 
-    existing, basis = index.open_activity(deal)
+    existing, basis, agent_authored = index.open_activity(deal)
     if existing:
-        if basis == "party":
+        if agent_authored:
+            # Not creating a duplicate is still right. Calling it "already
+            # handled" is not: this is the agent's own unactioned note, and
+            # reporting it as an existing action is precisely how a rotting
+            # deal disappears from everyone's view.
+            reasons.append(
+                f"the only open Activity on this deal was created by this agent "
+                f"({PROVENANCE_MARKER}, due {existing.get('due_date')}) and is still not "
+                f"done - that is bookkeeping, not evidence anyone contacted the customer. "
+                f"Not creating a second one; a human needs to action the existing task.")
+        elif basis == "party":
             # Deliberately conservative on a shared book: a party-level match
             # may belong to another deal with the same customer. Skipping is
             # recoverable, a duplicate nudge to a customer is not - and the
@@ -252,7 +444,7 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
         "due_date": due,
         "deal_id": deal_id,
         "priority": "medium",
-        "description": f"{template}\n\n(created_by=pipeline_agent run={run_id}; "
+        "description": f"{template}\n\n({PROVENANCE_MARKER} run={run_id}; "
                         f"stage at time of writing: {stage})",
     }
 
@@ -279,7 +471,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     threshold, used_live = await load_rot_threshold(client)
 
     try:
-        deals = await load_candidate_deals(client, threshold)
+        all_deals = await load_deals(client)
     except PermissionDeniedError as e:
         return build_refusal(e, required_entities=["Deal"], tools_attempted=["list(Deal)"])
 
@@ -291,26 +483,38 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
 
     now = dt.datetime.now(dt.timezone.utc)
 
-    # Worst-rot first, so a capped run acts on the deals that matter most
-    # rather than whatever the server happened to return first.
-    deals.sort(key=lambda d: d.get("_rot_days") or 0, reverse=True)
-    candidates_found = len(deals)
+    # Selection needs the Activity index, so it happens here rather than in
+    # the Deal read: rot is recomputed with this agent's own writes excluded,
+    # and the boundary that decides "rotting" is measured off the deals the
+    # agent has never touched.
+    calibration = calibrate_rot_boundary(all_deals, index, now)
+    assessed: list[tuple[dict, dict]] = []
+    for deal in all_deals:
+        candidate, evidence = assess_rot(deal, index, now, calibration)
+        if candidate:
+            assessed.append((deal, evidence))
+
+    # Worst-rot first on the recomputed number, not the platform's - otherwise
+    # every deal the agent has already written to sorts to the bottom at 0
+    # days and a capped run never reaches the ones it has been hiding.
+    assessed.sort(key=lambda pair: pair[1].get("independent_rot_days") or 0, reverse=True)
+    candidates_found = len(assessed)
     scope_notes: list[str] = []
 
     if request.deal_ids:
         wanted = set(request.deal_ids)
-        deals = [d for d in deals if d.get("id") in wanted]
-        missing = wanted - {d.get("id") for d in deals}
+        assessed = [pair for pair in assessed if pair[0].get("id") in wanted]
+        missing = wanted - {pair[0].get("id") for pair in assessed}
         if missing:
             # Silence here would read as "these deals are fine". They were
             # asked for and are not in the candidate set - say which.
             scope_notes.append(f"requested deal(s) not among the rotting candidates: "
                                 f"{', '.join(sorted(missing))}")
     if request.max_deals is not None:
-        deals = deals[:request.max_deals]
+        assessed = assessed[:request.max_deals]
 
     results: list[DealResult] = []
-    for deal in deals:
+    for deal, rot_evidence in assessed:
         last_contacted, basis = index.last_contacted(deal)
         contact_status, contact_evidence = classify_contact(
             now, threshold, last_contacted, basis)
@@ -318,12 +522,12 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
             client, deal, mode=request.mode, run_id=run_id, now=now, index=index)
         results.append(DealResult(
             deal_id=deal["id"], stage=deal.get("stage", ""),
-            rot_evidence={"_rot_level": deal.get("_rot_level"), "_rot_days": deal.get("_rot_days")},
+            rot_evidence=rot_evidence,
             contact_status=contact_status, contact_evidence=contact_evidence,
             action_status=action_status, next_action=next_action, reasons=reasons,
         ))
 
-    results.sort(key=lambda r: r.rot_evidence.get("_rot_days") or 0, reverse=True)
+    results.sort(key=lambda r: r.rot_evidence.get("independent_rot_days") or 0, reverse=True)
     threshold_note = "" if used_live else "CRMPreferences.deal_rot_days unavailable - used schema default"
 
     scope = (f"{candidates_found} rotting deal(s) found, threshold={threshold} days."
@@ -332,9 +536,18 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
              f"PARTIAL RUN: analyzed {len(results)} of them (--limit/--deal-id).")
     if scope_notes:
         scope += " " + "; ".join(scope_notes) + "."
+    laundered = sum(1 for r in results
+                    if r.rot_evidence.get("agent_write_suppressed_platform_signal"))
     summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
-               f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open.")
+               f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open. "
+               f"{calibration.note()}.")
+    if laundered:
+        # Loud, and in the one line a human is guaranteed to read.
+        summary += (f" WARNING: {laundered} deal(s) are shown here only because rot was "
+                    f"recomputed with this agent's own Activity rows excluded - the "
+                    f"platform reports them as fresh because the agent wrote to them, "
+                    f"not because anyone contacted the customer.")
 
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
