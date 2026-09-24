@@ -196,9 +196,24 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
                 f"{entity}: expected {expected}, got {probe['outcome']} ({probe['detail']})")
 
     report.gate_g1 = _gate_g1_verdict(report.probes)
+    # Readiness needs EVERY probe green, not just the Gate G1 verdict.
+    # `_gate_g1_verdict` answers "is the sales domain reachable at all", and
+    # returns `sales_reachable` on any single `ok` - correct for that question,
+    # and wrong as a readiness test: with Deal readable and Activity refused it
+    # reported `canonical task READY` and `claimed_success: true` for a seat that
+    # cannot run the task. architecture.md is explicit that a blocked seat must
+    # not look like a green run, so the probes decide readiness.
+    blocked = [p["entity"] for p in report.probes if p["outcome"] != "ok"]
     report.canonical_task_ready = (
-        report.gate_g1 == "sales_reachable" and not report.missing_canonical_tools
+        report.gate_g1 == "sales_reachable"
+        and not report.missing_canonical_tools
+        and not blocked
     )
+    if blocked:
+        report.notes.append(
+            "canonical task BLOCKED: " + ", ".join(blocked) + " not readable. Every "
+            "probed entity must be readable; a partially reachable seat cannot answer "
+            "the canonical question and must not report as ready.")
 
     if report.gate_g1 == "sales_blocked":
         report.notes.append(

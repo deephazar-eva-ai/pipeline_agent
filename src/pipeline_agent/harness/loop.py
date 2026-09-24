@@ -96,8 +96,20 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
             except PermissionDeniedError as e:
                 denials[key] = denials.get(key, 0) + 1
                 run.steps.append(Step("refused", tool, entity, False, str(e), arguments=arguments))
-                history.append(f"REFUSED {tool}({entity}): {e.message}. Domain '{e.domain}' is "
-                                f"outside this seat's policy. Do not retry this call.")
+                # Say only what the platform said. `e.domain` is this repo's own
+                # ENTITY_DOMAIN guess and is populated whether or not the server
+                # named a domain, so asserting it unconditionally fed the model a
+                # fabricated exclusion - the Gate G1 error, which was fixed in
+                # PermissionDeniedError and build_refusal on 2026-09-22 and missed
+                # here. On this platform the server names no domain, so this branch
+                # was telling the model 'sales' is excluded while the agent was
+                # reading Deal and Activity from it.
+                reason = (f"Domain '{e.domain}' is outside this seat's policy."
+                          if e.cites_domain else
+                          "The platform named no domain - the tool is simply not in "
+                          "this seat's tools/list.")
+                history.append(f"REFUSED {tool}({entity}): {e.message} {reason} "
+                                f"Do not retry this call.")
             except MCPToolError as e:
                 run.steps.append(Step("error", tool, entity, False, str(e), arguments=arguments))
                 history.append(f"ERROR {tool}({entity}): {e.message}")
