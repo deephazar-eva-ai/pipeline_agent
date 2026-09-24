@@ -178,6 +178,61 @@ activity at all, written twice.
    so the *next* change can be attributed rather than merely counted. Which
    tool appeared on 2026-09-22 is unrecoverable - no earlier run kept the list.
 
+## Found 2026-09-24 by regression testing, both fixed
+
+Both were this repo's own bugs, both found only by running the agent against a
+platform that had moved underneath it. Neither would have surfaced from a
+re-read of the code.
+
+1. **The tool-catalogue drift guard had never worked.** The check added above
+   (item 2 of 2026-09-22) read `report.detected_surface` five lines *before*
+   that field was assigned, so it always compared against the dataclass
+   default `UNKNOWN`, never matched `ENTITY_SCOPED`, and was unreachable code.
+   Live proof on 2026-09-24: the catalogue read 242 against a recorded
+   baseline of 238 and `changes_from_recorded_state` came back `[]`. The guard
+   written specifically so the access boundary could not move unobserved
+   watched it move twice - 237 -> 238 -> 242 - and said nothing both times.
+   The assignment now precedes the check, and the guard is verified to fire on
+   a mismatch and stay quiet on a match.
+
+2. **`agent_write_suppressed_platform_signal` accused the agent on deals it
+   had never touched.** `assess_rot` set the flag whenever the independent
+   signal flagged a deal and the platform's did not, without checking whether
+   this agent had actually written to it. That is not the same condition: the
+   platform's boundary being wider than ours produces the same disagreement.
+   On 2026-09-24 the platform flagged nothing at all, so the branch fired on
+   **83 of 83 candidates when only one had ever been written to** - 82 false
+   accusations, each carrying a row-level note claiming the agent's own write
+   had hidden the deal, plus a summary `WARNING` with the same false count.
+   Now gated on `deal.id in index.agent_written_deals`. Re-verified live: 84
+   candidates, 1 flagged, 0 false. The stub still flags `stub-deal-laundered`
+   and only it, so the fix narrows the claim without disarming it.
+
+   This one matters out of proportion to its size. The warning is this repo's
+   headline safety feature; firing it on 82 deals that were fine is how a
+   reader learns to ignore the one line that is real.
+
+### Platform changes found in the same pass
+
+- **The rot-laundering loop no longer reproduces.** Deal `7de1dd77` reads
+  `_rot_days: 11`, which is days since its `updated_at`; the agent's own
+  Activity, created 3 days ago, does not move it. Across all 88 open deals the
+  platform now matches `updated_at` alone with zero mismatches, and matches
+  `max(updated_at, latest linked Activity)` with one - the agent's deal. So
+  `independent_rot_days` currently reproduces the platform exactly and the
+  defence is redundant. It stays: one data point cannot distinguish "not-done
+  activities stopped counting" from "activities stopped counting", and the
+  platform has already changed this computation once.
+- **`Activity.deal_id` is no longer "never populated"** - 29 of 176 carry one
+  (was 0 of 175). The claim in the data-findings section above is stale as
+  written; 147 still carry party only, so the party fallback stays load-bearing.
+- **Catalogue 238 -> 242.** The four added tools are `endpoint.*` tools for
+  apps this seat is *not* entitled to. Filed as platform bugs, with the
+  inconsistent app-entitlement gate they exposed.
+
+Full report, including the eight platform bugs filed on 2026-09-24:
+`EAG_V3_capstone/docnotshared/capstone_bughunt.md`.
+
 ## Still open
 
 1. **Write mode has run exactly once, on one deal, with consent.** Deal

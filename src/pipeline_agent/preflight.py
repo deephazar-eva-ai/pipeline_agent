@@ -61,7 +61,17 @@ SALES_ENTITIES = ("Deal", "Activity")
 # mistake as trusting the remembered Gate G1 result.
 #
 # Update this deliberately, with the date, when a change is understood.
-RECORDED_TOOL_COUNT = 238
+#
+# 2026-09-24: 238 -> 242. The four added tools are all `endpoint.*` tools for
+# apps this seat is NOT entitled to (`allowed_apps: ["crm","agent"]`):
+#   endpoint.accounting.supplier_scorecard
+#   endpoint.inventory.shipping_board
+#   endpoint.manufacturing.demand_forecast
+#   endpoint.manufacturing.label
+# Attributable only because a run artifact had kept the sorted names. The
+# expansion is filed as a platform bug; the count is updated here so the next
+# move is measured against today rather than against a stale number.
+RECORDED_TOOL_COUNT = 242
 
 
 @dataclass
@@ -148,6 +158,13 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
         names = [t.get("name", "") for t in tools if isinstance(t, dict)]
         report.tool_count = len(names)
         report.tool_names = sorted(names)
+        # Detect the surface BEFORE the drift check reads it. Until 2026-09-24
+        # these two statements were the other way round, so the check ran
+        # against the dataclass default (`UNKNOWN`), never matched
+        # ENTITY_SCOPED, and was unreachable code. The catalogue moved
+        # 238 -> 242 under it without a word - exactly the silent boundary
+        # change the check exists to make impossible.
+        report.detected_surface = detect_surface(names)
         # Scoped to the surface the baseline was taken on. The stub serves 13
         # generic tools by design, and reporting that as "the access boundary
         # moved" would train a reader to ignore the one line that matters.
@@ -156,7 +173,6 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
                 f"tool catalogue size {report.tool_count}, recorded {RECORDED_TOOL_COUNT} - "
                 f"this seat's access boundary moved; diff tool_names against an earlier "
                 f"run artifact and update RECORDED_TOOL_COUNT once the change is understood")
-        report.detected_surface = detect_surface(names)
         present = set(names)
         required = CANONICAL_TASK_TOOLS.get(report.detected_surface, ())
         report.missing_canonical_tools = [t for t in required if t not in present]

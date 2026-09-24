@@ -229,7 +229,16 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
         "platform_flags": platform_flags,
         "independently_flags": independently_flags,
     })
-    if independently_flags and not platform_flags:
+    # The two signals disagreeing is NOT by itself evidence of laundering: the
+    # platform's boundary can simply be wider than ours, which is the normal
+    # case on this book (2026-09-24: every open deal reads `fresh`, so all 83
+    # candidates disagreed and only one had ever been written to). The claim
+    # below names this agent as the cause, so it is only honest when this agent
+    # actually wrote to this deal. Without the membership test it fired on 82
+    # deals the agent had never touched - a false accusation on its own report,
+    # and the fastest way to teach a reader to ignore the one warning that
+    # matters.
+    if independently_flags and not platform_flags and deal.get("id") in index.agent_written_deals:
         # The headline finding. Say it in the evidence, in words, on the row
         # it applies to - not only in an aggregate at the bottom of a report.
         evidence["agent_write_suppressed_platform_signal"] = True
