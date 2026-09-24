@@ -75,6 +75,25 @@ ROT_LEVEL_NOT_APPLICABLE = "none"
 ROT_BOUNDARY_FALLBACK = 5
 
 
+def _last_page(resp: Any, offset: int, got: int, page_size: int) -> bool:
+    """Has the scan reached the end of the collection?
+
+    A missing `total` must mean "unknown", not "zero". The previous test was
+    `offset >= (resp.get("total") or 0)`, which on a response without `total`
+    evaluates to `1000 >= 0` and stops after the first page - a silently
+    partial index that reads as a complete one. The live server does return
+    `total`, so this was latent; any proxy, cache or future response shape
+    that dropped the field turned it into a wrong answer.
+
+    So: trust `total` when it is actually present, and otherwise keep paging
+    until a short page proves the end.
+    """
+    total = resp.get("total") if isinstance(resp, dict) else None
+    if isinstance(total, int):
+        return offset >= total
+    return got < page_size
+
+
 def _parse_ts(value: Any) -> dt.datetime | None:
     """Platform timestamps are naive ISO (`2026-09-12T17:19:56.312557`) while
     `now` is tz-aware UTC; subtracting the two raises rather than misreports,
@@ -249,7 +268,7 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
     return platform_flags or independently_flags, evidence
 
 
-async def load_deals(client: MCPClient) -> list[dict]:
+async def load_deals(client: MCPClient, *, page_size: int = 1000) -> list[dict]:
     """Every deal, unfiltered.
 
     `Deal.list` has no server-side filter on `_rot_level`/`_rot_days` (they are
@@ -261,9 +280,22 @@ async def load_deals(client: MCPClient) -> list[dict]:
 
     The full list is kept rather than filtered here: `calibrate_rot_boundary`
     needs the deals that are NOT rotting to find the boundary.
+
+    Pages, because a single `limit=1000` read silently returned 1000 of a
+    reported 2500 - a confident answer computed from 40% of the book, with no
+    error and no warning. At 138 deals that was dormant; it wakes up at 1001.
     """
-    resp = await client.list_("Deal", limit=1000)
-    return resp.get("records", []) if isinstance(resp, dict) else []
+    deals: list[dict] = []
+    offset = 0
+    while True:
+        resp = await client.list_("Deal", limit=page_size, offset=offset)
+        records = (resp.get("records") or []) if isinstance(resp, dict) else []
+        if not records:
+            return deals
+        deals.extend(records)
+        offset += len(records)
+        if _last_page(resp, offset, len(records), page_size):
+            return deals
 
 
 @dataclass
@@ -366,7 +398,7 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> Ac
                     index.open_by_party.setdefault(party_id, activity)
         index.scanned += len(records)
         offset += len(records)
-        if offset >= (resp.get("total") or 0):
+        if _last_page(resp, offset, len(records), page_size):
             return index
 
 
@@ -394,6 +426,18 @@ def classify_contact(now: dt.datetime, threshold_days: int, last_contacted: str 
                                                        "reason": "unparseable date"}
     days_since = (now - last).days
     evidence = {"last_contacted": last_contacted, "days_since": days_since, "basis": basis}
+    if days_since < 0:
+        # A completed activity dated in the future. Activity has no
+        # `completed_at`, so `due_date` is the only date available and it is
+        # a scheduling field, not a record of when anyone spoke to anyone.
+        # What is actually known is "this was completed, when is unknown",
+        # which is what INSUFFICIENT_EVIDENCE means - the same treatment an
+        # unparseable date already gets above. Reporting `recently_contacted`
+        # on a negative elapsed time drew a positive conclusion from an
+        # impossible number, and dropped the deal from the report.
+        evidence["reason"] = ("completion date is in the future - Activity has no "
+                               "completed_at, so the date of contact is unknown")
+        return ContactStatus.INSUFFICIENT_EVIDENCE, evidence
     if days_since >= threshold_days:
         return ContactStatus.NOT_CONTACTED_SINCE_THRESHOLD, evidence
     return ContactStatus.RECENTLY_CONTACTED, evidence
@@ -477,7 +521,29 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
 
 async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                               run_id: str) -> CanonicalAnswer | RefusalResult:
-    threshold, used_live = await load_rot_threshold(client)
+    try:
+        threshold, used_live = await load_rot_threshold(client)
+        threshold_note = ("" if used_live else
+                          "CRMPreferences.deal_rot_days unavailable - used schema default")
+    except PermissionDeniedError as e:
+        # CRMPreferences is NOT a required entity: the contract defines a
+        # refusal as "the moment a REQUIRED entity is inaccessible", and names
+        # only Deal and Activity. Refusing here would discard a complete,
+        # correct rotting-deals answer over a preferences lookup.
+        #
+        # It is also cheap to lose: `threshold` no longer selects rotting deals
+        # at all - `calibrate_rot_boundary` measures that from live data - it
+        # only feeds contact classification. So this degrades one column rather
+        # than invalidating the answer, and the answer says so.
+        #
+        # Previously this call sat outside every guard, so a refusal escaped
+        # `run_canonical_task` entirely and the run died with a traceback,
+        # returning neither of the two results the contract allows.
+        threshold, used_live = DEFAULT_ROT_DAYS, False
+        threshold_note = (
+            f"CRMPreferences is not readable from this seat ({e.message}) - used the "
+            f"schema default of {DEFAULT_ROT_DAYS} days for contact classification. "
+            f"Rot selection is unaffected: the boundary is measured from live data.")
 
     try:
         all_deals = await load_deals(client)
@@ -537,7 +603,6 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         ))
 
     results.sort(key=lambda r: r.rot_evidence.get("independent_rot_days") or 0, reverse=True)
-    threshold_note = "" if used_live else "CRMPreferences.deal_rot_days unavailable - used schema default"
 
     scope = (f"{candidates_found} rotting deal(s) found, threshold={threshold} days."
              if len(results) == candidates_found else

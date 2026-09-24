@@ -83,6 +83,43 @@ Before any `Activity.create`:
 This sequence is unconditional Python (`agent/workflow.determine_next_action`),
 not something asked of the model - see `docs/architecture.md` for why.
 
+## Which entities a refusal actually depends on
+
+Decided 2026-09-24, after a refusal on `CRMPreferences` was found escaping
+`run_canonical_task` and killing the run with a traceback - returning neither
+of the two results this contract allows.
+
+**Only `Deal` and `Activity` are required.** A refusal on either is a
+`RefusalResult`, as above. `CRMPreferences` is **not** required: if it refuses,
+the run falls back to `DEFAULT_ROT_DAYS` and says so in `unavailable_note`.
+
+The reasoning, so this is not re-litigated:
+
+- Refusing would discard a complete, correct rotting-deals answer over a
+  preferences lookup. That is a worse failure than a weaker contact column.
+- `deal_rot_days` no longer selects rotting deals at all - `calibrate_rot_boundary`
+  measures that boundary from live data. The threshold now feeds only contact
+  classification, so losing it degrades one column rather than invalidating the
+  answer.
+- The fallback already existed for the "no record returned" case; the refusal
+  path simply never routed into it.
+
+## A completed activity dated in the future
+
+Decided 2026-09-24. `Activity` has no `completed_at`, so contact recency is
+derived from `done` plus `due_date` - a scheduling field, not a record of when
+anyone spoke to anyone. One live row is `done=1` with a `due_date` ahead of
+today (filed against the platform as B8, report `529f67e0`).
+
+Such a row classifies as **`insufficient_evidence`**, not `recently_contacted`.
+What is actually known is "this was completed, when is unknown", which is what
+that status means - and it is the same treatment an unparseable date already
+receives. The previous behaviour computed `days_since: -3` and drew a positive
+conclusion from it, dropping the deal out of the report on an impossible number.
+
+This also lands on the safe side of the rule used throughout: over-reporting a
+deal that turns out to be fine is recoverable, hiding a rotting one is not.
+
 ## Error policy
 
 A `PermissionDeniedError` on `Deal` or `Activity` is not routed around with
