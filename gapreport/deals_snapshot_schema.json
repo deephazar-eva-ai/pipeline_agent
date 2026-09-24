@@ -1,0 +1,244 @@
+{
+  "title": "DealSnapshot — Historical Pipeline Ledger",
+  "purpose": "A per-deal, point-in-time snapshot table for the AgentSwitch CRM. Every time it runs, the rotting-deals agent (or a scheduled AgentTask) writes one row capturing the deal's stage, stage-transition history, and a computed rot score as they stood at that moment — so pipeline health can be queried and trended with plain SQL/report calls, instead of only being recomputed live from Deal + Activity on every question.",
+
+  "source_adaptation": {
+    "reference_doc": "/home/acer/Documents/DEEPAK/eva_april2026/msmecrmapp/docs/dbschema_msme.md",
+    "reference_table": "dummy_snapshot (opty_snapshot/create_dummy_snapshot.sql, opty_snapshot/populate_rot_scores.py)",
+    "reference_model": "MSME CRM's standalone `opportunities` table + a Postgres JSONB snapshot/rot-score side table.",
+    "target_schema": "/home/acer/Documents/DEEPAK/eva_april2026/capstone/document/schemas.json",
+    "entity_being_mapped": "Deal (domain=sales, kind=record, flow=DealFlow) — see `entity_schema` below.",
+    "field_mapping": {
+      "opportunity_id (TEXT, FK -> opportunities)": "deal_id (link -> Deal)",
+      "current_stage (TEXT, free-text stage names: Prospecting/Qualification/Proposal Sent/Negotiation/Verbal Commit/Closed Won/Closed Lost)": "current_stage (type=state, flow=DealFlow, states: new/qualification/proposal/negotiation/closed_won/closed_lost) — reuses Deal's own flow instead of inventing a parallel stage vocabulary",
+      "stage_history (JSONB array)": "stage_history (type=code, same array-of-transitions shape, stage names swapped to DealFlow states)",
+      "custom_fields (JSONB object: scenario_tag, risk_flag, days_stuck, last_activity_days_ago, installation_type, competitor_won, deal_amount_inr, lost_reason, notes)": "custom_fields (type=code) — same idea, deal_amount_inr replaced by a currency-aware {value, currency} pair (AgentSwitch is multi-currency; the reference dataset was INR-only), installation_type dropped (motor/product-specific, not meaningful for a generic Deal), lost_reason left in place (Deal already has its own lost_reason field — the snapshot copy freezes what it was AT CAPTURE TIME, in case the live Deal record is edited later)",
+      "rot_score (NUMERIC(4,3))": "rot_score (type=number) — same formula, same weights, ported as-is (see rot_score_model)",
+      "rot_comment (TEXT)": "rot_comment (type=text) — same one-line dominant-component explanation, ported as-is"
+    },
+    "key_differences_from_reference": [
+      "No opportunity_activity side table exists in AgentSwitch — 'days since last activity' is computed from the existing Activity entity (filters: deal_id, done=true, sort by due_date desc) instead of a bespoke activity log.",
+      "The reference `dummy_snapshot` has exactly one row per opportunity and no capture timestamp — despite its name, it behaves as a current-state cache, not a time series. Since the brief here is explicitly 'store historical information', this schema adds `captured_at` and `snapshot_reason` so multiple snapshots can accumulate per deal over time; the natural key becomes (deal_id, captured_at), not deal_id alone.",
+      "Denormalizes company_id, party_id, owner, pipeline and probability at capture time (reference kept these inside custom_fields only, or relied on a live join to `opportunities`) — a snapshot table should freeze the facts it cares about, not silently re-derive them from a Deal record that may have since changed.",
+      "AgentSwitch already computes a simpler two-value rot signal on Deal.list itself (_rot_level: fresh/aging/stale/none, _rot_days, threshold from CRMPreferences.deal_rot_days). DealSnapshot.rot_score is a richer, five-component weighted score for trend analysis and does not replace that field — the two are complementary (see rot_score_model.relationship_to_platform_rot_level)."
+    ]
+  },
+
+  "entity_schema": {
+    "entity": "DealSnapshot",
+    "domain": "sales",
+    "kind": "ledger",
+    "behaviors": [],
+    "number_format": { "default": "DSNAP-.YYYY.-.#####" },
+    "fields": [
+      { "name": "company_id", "type": "link", "to": "Company", "required": true, "description": "Tenant scope, denormalized at capture time (matches every other entity's multi-tenant pattern)." },
+      { "name": "deal_id", "type": "link", "to": "Deal", "required": true, "description": "The deal this snapshot describes. Many rows per deal over time." },
+      { "name": "captured_at", "type": "date", "subtype": "datetime", "required": true, "description": "When this snapshot was taken. Forms the time axis; (deal_id, captured_at) is the effective natural key." },
+      { "name": "snapshot_reason", "type": "select", "required": true, "options": ["scheduled", "stage_transition", "escalation", "manual"], "description": "Why this row exists: a recurring AgentTask sweep, a Deal.stage transition trigger, right before an AgentEscalation was raised, or a manual pull." },
+      { "name": "captured_by", "type": "text", "required": false, "description": "Actor that wrote the row — an AgentPersona name, AgentTask id, or a user id for manual captures." },
+      { "name": "current_stage", "type": "state", "flow": "DealFlow", "required": true, "description": "Deal.stage as of captured_at. Reuses the platform's own DealFlow rather than a parallel vocabulary." },
+      { "name": "party_id", "type": "link", "to": "Party", "required": false, "description": "Deal.party_id at capture time (denormalized so history survives the deal being reassigned)." },
+      { "name": "owner", "type": "text", "required": false, "description": "Deal.owner at capture time." },
+      { "name": "pipeline", "type": "text", "required": false, "description": "Deal.pipeline at capture time." },
+      { "name": "value", "type": "currency", "required": false, "description": "Deal.value at capture time." },
+      { "name": "currency", "type": "text", "required": false, "description": "Deal.currency at capture time (replaces the reference's INR-only deal_amount_inr)." },
+      { "name": "probability", "type": "number", "required": false, "description": "Deal.probability at capture time." },
+      { "name": "expected_close_date", "type": "date", "required": false, "description": "Deal.expected_close_date at capture time — compared against captured_at to derive the slippage component." },
+      { "name": "stage_history", "type": "code", "required": false, "description": "JSON array of stage transitions up to captured_at. See stage_history_shape below." },
+      { "name": "custom_fields", "type": "code", "required": false, "description": "JSON object of scenario/risk metadata. See custom_fields_shape below." },
+      { "name": "has_regressed", "type": "bool", "required": false, "description": "True if stage_history contains a transition with event='regression' (the deal moved backward in DealFlow, e.g. negotiation -> qualification)." },
+      { "name": "days_since_last_activity", "type": "number", "required": false, "description": "Raw input behind activity_score — days between captured_at and the most recent done=true Activity linked to this deal." },
+      { "name": "rot_score", "type": "number", "required": false, "description": "0 (fresh) to 1 (fully rotten). NULL for closed_won/closed_lost deals — see rot_score_model." },
+      { "name": "rot_comment", "type": "text", "required": false, "description": "One-line explanation naming the dominant component behind rot_score (stage time, inactivity, slippage, regression, or deal value)." }
+    ],
+    "permissions": {
+      "admin": ["read"],
+      "sales_manager": ["read"],
+      "sales_rep": ["read"],
+      "finance_admin": ["read"],
+      "auditor": ["read"]
+    }
+  },
+
+  "stage_history_shape": {
+    "type": "array",
+    "item_shape": {
+      "stage": "one of DealFlow's states: new | qualification | proposal | negotiation | closed_won | closed_lost",
+      "entered_at": "ISO date the deal entered this stage",
+      "days_in_stage": "integer — how long it stayed there before the next transition (or, for the last entry, days up to captured_at)",
+      "event": "optional — 'regression' when this transition moved the deal backward relative to DealFlow's normal forward order (new -> qualification -> proposal -> negotiation -> closed_won/closed_lost)"
+    },
+    "example": [
+      { "stage": "new", "entered_at": "2026-07-02", "days_in_stage": 6 },
+      { "stage": "qualification", "entered_at": "2026-07-08", "days_in_stage": 14 },
+      { "stage": "proposal", "entered_at": "2026-07-22", "days_in_stage": 11 },
+      { "stage": "negotiation", "entered_at": "2026-08-02", "days_in_stage": 9 },
+      { "stage": "qualification", "entered_at": "2026-08-11", "days_in_stage": 20, "event": "regression" }
+    ]
+  },
+
+  "custom_fields_shape": {
+    "type": "object",
+    "keys": {
+      "scenario_tag": "human-readable bucket for reporting/testing, e.g. 'Healthy Progression', 'Stalled - At Risk', 'Ghost - No Engagement', 'Regressed Deal', 'High Value - At Risk', 'Fast Track - Hot Deal', 'Closed Won - Efficient Cycle', 'Closed Lost - Lost to Competitor' (ported verbatim from the reference dataset's scenario taxonomy)",
+      "risk_flag": "bool — quick filter, true when rot_score >= rot_score_model.thresholds.at_risk",
+      "days_stuck": "integer — days_in_current_stage at capture time (denormalized copy of the last stage_history entry's days_in_stage for easy SQL filtering without unpacking JSON)",
+      "last_activity_days_ago": "integer or null — same value as the top-level days_since_last_activity field, kept here too for parity with the reference's custom_fields shape",
+      "competitor_won": "text or null — populated only when stage=closed_lost and the deal was lost to a named competitor",
+      "lost_reason": "text or null — snapshot-time copy of Deal.lost_reason",
+      "value_at_capture": "{ \"value\": number, \"currency\": text } — duplicate of the top-level value/currency fields, kept nested for parity with the reference's embedded deal_amount_inr and for JSONB-containment queries",
+      "notes": "free-text one-liner summarizing why this snapshot looks the way it does"
+    }
+  },
+
+  "rot_score_model": {
+    "ported_from": "src/msmecrmapp/pipeline_health/data.py: compute_rot_scores() / ROT_SCORE_WEIGHTS / _rot_comment() — formula and weights carried over unchanged, only the input queries change (see inputs_in_agentswitch).",
+    "formula": "rot_score = 0.35*S_stage + 0.25*S_activity + 0.20*S_slippage + 0.15*S_regression + 0.05*S_value",
+    "components": {
+      "S_stage": "min(days_in_current_stage / (2 * median_days_for_that_stage_among_closed_won_deals), 1) — a deal sitting in a stage twice as long as a typical won deal maxes this out.",
+      "S_activity": "min(days_since_last_activity / 30, 1) — days since the most recent done=true Activity linked to the deal.",
+      "S_slippage": "min(max(days_past_expected_close_date, 0) / 45, 1) — 0 until expected_close_date has passed.",
+      "S_regression": "1 if has_regressed else 0 — any backward transition in stage_history.",
+      "S_value": "min(deal.value / p90(value among all open deals), 1) — bigger deals rot 'louder'."
+    },
+    "weights": { "stage": 0.35, "activity": 0.25, "slippage": 0.20, "regression": 0.15, "value": 0.05 },
+    "caps_days": { "activity": 30, "slippage": 45 },
+    "thresholds": { "at_risk": 0.5, "critical": 0.75 },
+    "scope": "Open deals only — stage not in [closed_won, closed_lost]. rot_score/rot_comment are left NULL for closed deals, exactly as in the reference.",
+    "inputs_in_agentswitch": {
+      "days_in_current_stage": "from the last entry of this row's own stage_history",
+      "median_days_for_that_stage": "computed once, offline, from stage_history of DealSnapshot rows whose deal_id's Deal.stage = closed_won — same 'baseline from won deals' idea as the reference's fetch_closed_won_stage_history()",
+      "days_since_last_activity": "report(entity=Activity, aggregate=max, field=due_date, group_by=deal_id, filters={deal_id, done:true}) via the agent_tools.json `report` tool, or Activity.list(filters={deal_id, done:true}, sort_by=due_date, sort_order=desc, limit=1)",
+      "days_past_expected_close_date": "captured_at - Deal.expected_close_date, floored at 0",
+      "has_regressed": "any stage_history entry with event='regression' for this deal, up to captured_at",
+      "deal.value / p90(value)": "Deal.value for this row vs. the 90th percentile of value across all currently-open deals, via report(entity=Deal, aggregate=max/avg as a p90 proxy or computed client-side from list(...))"
+    },
+    "relationship_to_platform_rot_level": "AgentSwitch's own Deal.list already returns a computed `_rot_level` (fresh/aging/stale/none) and `_rot_days`, driven purely by elapsed time against CRMPreferences.deal_rot_days — a single threshold, no activity/slippage/regression/value weighting, and not persisted anywhere (recomputed on every read). DealSnapshot.rot_score is the richer, multi-factor score from the reference model, persisted so it can be trended over time and queried without recomputation; the two numbers will usually agree on direction but not on scale, and a report built on this table should not conflate them."
+  },
+
+  "sql_ddl_postgres": "CREATE TABLE IF NOT EXISTS deals_snapshot (\n    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    company_id                UUID NOT NULL,\n    deal_id                   UUID NOT NULL,\n    captured_at                TIMESTAMPTZ NOT NULL DEFAULT now(),\n    snapshot_reason           TEXT NOT NULL CHECK (snapshot_reason IN ('scheduled','stage_transition','escalation','manual')),\n    captured_by               TEXT,\n    current_stage             TEXT NOT NULL CHECK (current_stage IN ('new','qualification','proposal','negotiation','closed_won','closed_lost')),\n    party_id                  UUID,\n    owner                     TEXT,\n    pipeline                  TEXT,\n    value                     NUMERIC(18,2),\n    currency                  TEXT,\n    probability                NUMERIC(5,2),\n    expected_close_date        DATE,\n    stage_history              JSONB,\n    custom_fields              JSONB,\n    has_regressed              BOOLEAN DEFAULT false,\n    days_since_last_activity   INTEGER,\n    rot_score                 NUMERIC(4,3) CHECK (rot_score IS NULL OR (rot_score >= 0 AND rot_score <= 1)),\n    rot_comment                TEXT\n);\n\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_deal_id ON deals_snapshot (deal_id);\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_deal_captured ON deals_snapshot (deal_id, captured_at DESC);\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_current_stage ON deals_snapshot (current_stage);\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_rot_score ON deals_snapshot (rot_score) WHERE rot_score IS NOT NULL;\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_stage_history_gin ON deals_snapshot USING GIN (stage_history);\nCREATE INDEX IF NOT EXISTS idx_deals_snapshot_custom_fields_gin ON deals_snapshot USING GIN (custom_fields);",
+
+  "sample_rows": [
+    {
+      "deal_id": "a34b7680-78a2-40fe-b532-df1b40a1080c",
+      "company_id": "5cbe5a55-af74-4363-a436-f5350593114c",
+      "captured_at": "2026-09-17T09:00:00Z",
+      "snapshot_reason": "scheduled",
+      "captured_by": "AgentTask:weekly-deal-rot-sweep",
+      "current_stage": "new",
+      "party_id": "deb2a242-4508-4ad5-8c69-0fd7c3b0a7df",
+      "owner": null,
+      "pipeline": "oem_new_business",
+      "value": 8002.58,
+      "currency": "INR",
+      "probability": 0.0,
+      "expected_close_date": null,
+      "stage_history": [
+        { "stage": "new", "entered_at": "2026-09-12", "days_in_stage": 5 }
+      ],
+      "custom_fields": {
+        "scenario_tag": "Ghost - No Engagement",
+        "risk_flag": true,
+        "days_stuck": 5,
+        "last_activity_days_ago": null,
+        "competitor_won": null,
+        "lost_reason": null,
+        "value_at_capture": { "value": 8002.58, "currency": "INR" },
+        "notes": "No expected_close_date set and no Activity logged since creation — real note comment, not from live data."
+      },
+      "has_regressed": false,
+      "days_since_last_activity": null,
+      "rot_score": null,
+      "rot_comment": "Not scored yet: no Activity exists to anchor days_since_last_activity (illustrative row — real scoring requires at least one Activity or an explicit null-activity handling rule)."
+    },
+    {
+      "deal_id": "a917c1d2-54e8-4c22-8aa6-647cfe3b0ba7",
+      "company_id": "5cbe5a55-af74-4363-a436-f5350593114c",
+      "captured_at": "2026-09-17T09:00:00Z",
+      "snapshot_reason": "scheduled",
+      "captured_by": "AgentTask:weekly-deal-rot-sweep",
+      "current_stage": "negotiation",
+      "party_id": null,
+      "owner": null,
+      "pipeline": "default",
+      "value": 264000.0,
+      "currency": "INR",
+      "probability": 55.0,
+      "expected_close_date": "2026-09-21",
+      "stage_history": [
+        { "stage": "new", "entered_at": "2026-07-02", "days_in_stage": 6 },
+        { "stage": "qualification", "entered_at": "2026-07-08", "days_in_stage": 14 },
+        { "stage": "proposal", "entered_at": "2026-07-22", "days_in_stage": 11 },
+        { "stage": "negotiation", "entered_at": "2026-08-02", "days_in_stage": 46 }
+      ],
+      "custom_fields": {
+        "scenario_tag": "Stalled - At Risk",
+        "risk_flag": true,
+        "days_stuck": 46,
+        "last_activity_days_ago": 33,
+        "competitor_won": null,
+        "lost_reason": null,
+        "value_at_capture": { "value": 264000.0, "currency": "INR" },
+        "notes": "Illustrative worked example (§4 of docs/crm_gapreport.md) — SuryaTools Nashik ITI bulk order sitting in negotiation well past the typical cycle, with a month of silence."
+      },
+      "has_regressed": false,
+      "days_since_last_activity": 33,
+      "rot_score": 0.586,
+      "rot_comment": "Primarily driven by time in current stage: 46 days in negotiation vs. a ~20-day median for won deals (rot score 0.59)."
+    },
+    {
+      "deal_id": "b17a4728-da60-47ff-acb4-332d16975c98",
+      "company_id": "5cbe5a55-af74-4363-a436-f5350593114c",
+      "captured_at": "2026-09-12T22:49:48Z",
+      "snapshot_reason": "stage_transition",
+      "captured_by": "Deal.mark_lost.negotiation.closed_lost",
+      "current_stage": "closed_lost",
+      "party_id": "252ce757-ce8b-408f-99ef-ef32c6ea5dfe",
+      "owner": null,
+      "pipeline": "Bench Vice 7398",
+      "value": 1122750.0,
+      "currency": "INR",
+      "probability": 5.0,
+      "expected_close_date": "2025-08-04",
+      "stage_history": [
+        { "stage": "new", "entered_at": "2025-06-01", "days_in_stage": 20 },
+        { "stage": "qualification", "entered_at": "2025-06-21", "days_in_stage": 25 },
+        { "stage": "negotiation", "entered_at": "2025-07-16", "days_in_stage": 58 },
+        { "stage": "closed_lost", "entered_at": "2026-09-12", "days_in_stage": null }
+      ],
+      "custom_fields": {
+        "scenario_tag": "Closed Lost - Lost to Competitor",
+        "risk_flag": false,
+        "days_stuck": null,
+        "last_activity_days_ago": null,
+        "competitor_won": "Punch Set 7398",
+        "lost_reason": "Punch Set 7398",
+        "value_at_capture": { "value": 1122750.0, "currency": "INR" },
+        "notes": "Real deal from deallist.json — closed_lost is out of rot_score scope per the model."
+      },
+      "has_regressed": false,
+      "days_since_last_activity": null,
+      "rot_score": null,
+      "rot_comment": null
+    }
+  ],
+
+  "indexes": [
+    "btree(deal_id)",
+    "btree(deal_id, captured_at DESC) — fetch a deal's latest or full history fast",
+    "btree(current_stage)",
+    "partial btree(rot_score) WHERE rot_score IS NOT NULL — open-pipeline rot queries skip closed rows entirely",
+    "GIN(stage_history)",
+    "GIN(custom_fields)"
+  ],
+
+  "row_count_plan": "Unlike the reference's fixed 180-row, one-per-opportunity dummy_snapshot, this table grows over time: one row per open Deal per scheduled sweep (e.g. weekly via AgentTask), plus one row per Deal on every stage transition and every AgentEscalation raised. Expect roughly (open_deal_count * sweeps_per_period) + (stage_transitions) + (escalations) rows per period — prune or partition by captured_at once retention policy is decided (AgentRetentionRule/LedgerRetentionPolicy already exist on the platform for exactly this purpose).",
+
+  "notes": [
+    "This is a proposed schema, not a live AgentSwitch entity — it does not yet exist in document/schemas.json. Per docs/crm_gapreport.md §2b, adding it (a new table + write path) is backend work; the agent's existing 13-tool seat can compute everything in rot_score_model.inputs_in_agentswitch on the fly, this table just persists the result so it can be trended and queried without recomputation.",
+    "kind='ledger' matches the platform's own convention for append-only, system-written history tables (e.g. AgentRunbookRun, LedgerRetentionEvent) — permissions are read-only for business roles; only the agent/system actor writes rows.",
+    "current_stage reuses Deal's own DealFlow rather than the reference's free-text stage names (Prospecting/Proposal Sent/Verbal Commit/…), so stage_history stays queryable against the same flow the rest of the platform already understands.",
+    "'Verbal Commit' from the reference's STAGE_ORDER has no equivalent in DealFlow (new -> qualification -> proposal -> negotiation -> closed_won/closed_lost) and was dropped rather than invented.",
+    "'installation_type' from the reference's custom_fields was dropped — it's a motor/product-install attribute specific to the MSME manufacturing dataset, with no analogue on the generic Deal entity."
+  ]
+}
