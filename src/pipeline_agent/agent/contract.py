@@ -87,6 +87,43 @@ class UncalledParty:
 
 
 @dataclass
+class MaskedDeal:
+    """One open deal that reads fresh although its customer has not been
+    called: what makes it look fresh, and how old it really is by contact."""
+
+    deal_id: str
+    title: str
+    value: float
+    stage: str
+    looks_fresh_days: int | None     # the age the rot check used (independent_rot_days)
+    fresh_because: str               # "record_edit" | "non_call_activity"
+    fresh_basis_date: str | None     # the date that made it look fresh
+    fresh_basis_detail: str          # e.g. "deal record edited (not a customer contact)"
+    last_contact: str | None         # latest completed contact of any type
+    days_since_contact: int | None
+
+
+@dataclass
+class HiddenSilence:
+    """A customer who is in `uncalled` but whose open deals do not all appear
+    in the rotting list - the silence is real and the rot report hides it.
+
+    Exists because the two goals disagree on exactly the customers that matter
+    most: on Keystone (2026-09-28) Allegheny ($502,598 across 4 deals) and
+    Cardinal Tillage ($298,196 across 5) had gone 64 and 73 days without a
+    call and 35-55 days without contact of any kind, yet read 12 days old,
+    because every one of their deal records was edited on 2026-09-16."""
+
+    party_id: str
+    party_name: str
+    last_called: str | None
+    days_since_call: int | None
+    masked_deals: list[MaskedDeal]
+    masked_value: float
+    open_deal_value: float
+
+
+@dataclass
 class CanonicalAnswer:
     """Output contract for Track A - the full three-part task."""
 
@@ -102,6 +139,9 @@ class CanonicalAnswer:
     # `pipeline.uncalled_30_days`: every party with an open deal whose latest
     # completed call is `deal_rot_days` or more ago, or who was never called.
     uncalled: list[UncalledParty] = field(default_factory=list)
+    # The subset of `uncalled` whose deals the rot check still reads as fresh,
+    # each with the reason it looks fresh. Largest hidden value first.
+    hidden_silence: list[HiddenSilence] = field(default_factory=list)
 
 
 @dataclass

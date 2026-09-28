@@ -26,6 +26,16 @@ Exactly one of:
   `open_deal_value`. Keyed on the party, not the deal: a call logged against
   one deal of a customer still counts for its other deals. Only `type=call`
   counts, only done, only dated on or before today. Never-called first.
+  Also `hidden_silence`: the customers in `uncalled` that still have open deals
+  **missing from the rotting list**, which is where the two goals disagree. Each
+  `HiddenSilence` lists its `masked_deals`. For each one, `fresh_because`
+  (`record_edit` or `non_call_activity`), `fresh_basis_date` and
+  `fresh_basis_detail` say what made the deal look fresh, and `last_contact` /
+  `days_since_contact` give its real age by contact alone. Largest hidden value
+  first. When this list is non-empty, the `summary` states it too, because a
+  reader of the rot list alone would never see these deals. Measured on
+  Keystone on 2026-09-28: 5 customers, 13 deals, $963,392, all masked by one
+  bulk record edit on 2026-09-16 and none by emails or meetings.
 - **`RefusalResult`** - returned instead of a partial/best-effort answer the
   moment a required entity (`Deal` or `Activity`) is inaccessible. Names the
   missing entities and every tool call attempted before giving up.

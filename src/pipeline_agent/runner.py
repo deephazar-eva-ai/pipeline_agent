@@ -80,6 +80,21 @@ def _report_result(run: TaskRun, result: Any) -> None:
             since = "never called" if u.last_called is None else f"{u.days_since}d ({u.last_called})"
             print(f"  {u.party_name:<34} {since:<20} open deals={len(u.open_deal_ids)} "
                   f"value={u.open_deal_value:,.0f}")
+        # Customers the two lists above disagree about - uncalled, yet with
+        # deals missing from the rot list. Each deal says why it looks fresh.
+        print(f"\nhidden_silence ({len(result.hidden_silence)}): "
+              f"not called, but deals read as fresh")
+        for h in result.hidden_silence:
+            call = "never called" if h.last_called is None else \
+                f"last call {h.days_since_call}d ago ({h.last_called})"
+            print(f"  {h.party_name}: {call}; {len(h.masked_deals)} deal(s) worth "
+                  f"{h.masked_value:,.0f} look fresh")
+            for m in h.masked_deals:
+                contact = "no contact on record" if m.last_contact is None else \
+                    f"real last contact {m.days_since_contact}d ago ({m.last_contact})"
+                print(f"    {m.deal_id[:8]} {m.value:>11,.0f}  {m.stage:<13} looks "
+                      f"{m.looks_fresh_days}d old because: {m.fresh_basis_detail} "
+                      f"{m.fresh_basis_date}; {contact}")
 
     elif isinstance(result, RefusalResult):
         run.claimed_success = False

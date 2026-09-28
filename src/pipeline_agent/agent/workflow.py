@@ -22,7 +22,7 @@ from typing import Any
 
 from pipeline_agent.agent.contract import (
     ActionStatus, AgentRequest, CanonicalAnswer, ContactStatus, DealResult, ExecutionMode,
-    RefusalResult, UncalledParty,
+    HiddenSilence, MaskedDeal, RefusalResult, UncalledParty,
 )
 from pipeline_agent.agent.refusal import build_refusal
 from pipeline_agent.mcp.client import MCPClient, PermissionDeniedError
@@ -382,6 +382,10 @@ class ActivityIndex:
     # deal, which on a book that rarely fills `deal_id` is most contact.
     last_contact_by_deal: dict[str, str] = field(default_factory=dict)
     last_unlinked_contact_by_party: dict[str, str] = field(default_factory=dict)
+    # The Activity `type` of each of the two contacts above (call, email,
+    # meeting, task, ...), so a report can say *what* kept a deal fresh.
+    last_contact_type_by_deal: dict[str, str] = field(default_factory=dict)
+    last_unlinked_contact_type_by_party: dict[str, str] = field(default_factory=dict)
     # Same, restricted to `type == "call"`, for `pipeline.uncalled_30_days`.
     # Keyed by party whatever the linkage: a call logged against one deal is
     # still a call to that customer.
@@ -491,11 +495,14 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                 # in the future, and not the agent's own bookkeeping.
                 day = str(due)[:10] if due else ""
                 if day and day <= today and not authored_by_agent:
+                    kind = str(activity.get("type") or "activity")
                     if deal_id and _later(index.last_contact_by_deal.get(deal_id), day):
                         index.last_contact_by_deal[deal_id] = day
+                        index.last_contact_type_by_deal[deal_id] = kind
                     if party_id and not deal_id and _later(
                             index.last_unlinked_contact_by_party.get(party_id), day):
                         index.last_unlinked_contact_by_party[party_id] = day
+                        index.last_unlinked_contact_type_by_party[party_id] = kind
                     if activity.get("type") == "call":
                         if party_id and _later(index.last_call_by_party.get(party_id), day):
                             index.last_call_by_party[party_id] = day
@@ -682,6 +689,69 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
     return rows
 
 
+def _explain_fresh(deal: dict, index: ActivityIndex, now: dt.datetime) -> MaskedDeal:
+    """Why does the rot check read this deal as fresh? Whichever input set
+    `independent_rot_days` - a record edit or a completed non-call contact -
+    named, with its date, next to the real age by contact alone."""
+    deal_id, party_id = deal.get("id"), deal.get("party_id")
+    by_deal = index.last_contact_by_deal.get(deal_id)
+    by_party = index.last_unlinked_contact_by_party.get(party_id)
+    if by_deal and (not by_party or by_deal >= by_party):
+        contact, kind = by_deal, index.last_contact_type_by_deal.get(deal_id, "activity")
+    else:
+        contact, kind = by_party, index.last_unlinked_contact_type_by_party.get(
+            party_id, "activity")
+    edited = str(deal.get("updated_at") or "")[:10] or None
+
+    if edited and (not contact or edited >= contact):
+        because, basis, detail = ("record_edit", edited,
+                                  "deal record edited (not a customer contact)")
+    else:
+        because, basis, detail = "non_call_activity", contact, f"done {kind} (not a call)"
+    return MaskedDeal(
+        deal_id=deal_id, title=str(deal.get("title") or deal_id),
+        value=float(deal.get("value") or 0), stage=str(deal.get("stage") or ""),
+        looks_fresh_days=independent_rot_days(deal, index, now),
+        fresh_because=because, fresh_basis_date=basis, fresh_basis_detail=detail,
+        last_contact=contact,
+        days_since_contact=(None if not contact
+                            else (now.date() - dt.date.fromisoformat(contact)).days))
+
+
+def find_hidden_silence(deals: list[dict], index: ActivityIndex, now: dt.datetime,
+                        uncalled: list[UncalledParty],
+                        rotting_ids: set[str]) -> list[HiddenSilence]:
+    """Customers the two goals disagree about: not called in the threshold
+    (they are in `uncalled`), yet at least one of their open deals is absent
+    from the rotting list.
+
+    That disagreement is the finding. A reader of the rot report alone sees
+    those deals as healthy; a reader of the uncalled list alone sees a name
+    with no hint that the rot report vouched for it. Each masked deal says
+    what made it look fresh - on Keystone that was a bulk record edit on
+    2026-09-16, not a call, an email or a meeting - so nobody has to
+    re-derive it, and nobody repeats the guess that emails were the cause.
+
+    Pure. Largest hidden value first: the question is where money is going
+    quiet, and a $0 deal going quiet is not the same news.
+    """
+    by_id = {d.get("id"): d for d in deals}
+    rows: list[HiddenSilence] = []
+    for party in uncalled:
+        masked = [_explain_fresh(by_id[i], index, now)
+                  for i in party.open_deal_ids if i in by_id and i not in rotting_ids]
+        if not masked:
+            continue
+        rows.append(HiddenSilence(
+            party_id=party.party_id, party_name=party.party_name,
+            last_called=party.last_called, days_since_call=party.days_since,
+            masked_deals=sorted(masked, key=lambda m: -m.value),
+            masked_value=sum(m.value for m in masked),
+            open_deal_value=party.open_deal_value))
+    rows.sort(key=lambda r: -r.masked_value)
+    return rows
+
+
 async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                               run_id: str) -> CanonicalAnswer | RefusalResult:
     try:
@@ -737,6 +807,9 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     # days and a capped run never reaches the ones it has been hiding.
     assessed.sort(key=lambda pair: pair[1].get("independent_rot_days") or 0, reverse=True)
     candidates_found = len(assessed)
+    # Taken before --limit/--deal-id narrow the list: a deal cut from a capped
+    # run is still rotting, and must not be reported as hidden silence.
+    rotting_ids = {deal.get("id") for deal, _ in assessed}
     scope_notes: list[str] = []
 
     if request.deal_ids:
@@ -776,6 +849,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     laundered = sum(1 for r in results
                     if r.rot_evidence.get("agent_write_suppressed_platform_signal"))
     uncalled = find_uncalled(all_deals, index, now, threshold)
+    hidden = find_hidden_silence(all_deals, index, now, uncalled, rotting_ids)
     summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
                f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open, "
@@ -784,6 +858,16 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                f"{len(uncalled)} customer(s) with open deals not called in {threshold} days "
                f"({sum(1 for u in uncalled if u.last_called is None)} never called). "
                f"Platform context: {calibration.note()}.")
+    if hidden:
+        # Stated in the summary, not only in `hidden_silence`: these deals are
+        # absent from the rot list above, so a reader of that list alone would
+        # never learn they exist.
+        summary += (
+            f" HIDDEN SILENCE: {len(hidden)} customer(s) not called in {threshold}+ days "
+            f"have {sum(len(h.masked_deals) for h in hidden)} open deal(s) worth "
+            f"{sum(h.masked_value for h in hidden):,.0f} that the rot check reads as fresh "
+            f"({sum(1 for h in hidden for m in h.masked_deals if m.fresh_because == 'record_edit')}"
+            f" only because the deal record was edited) - see hidden_silence.")
     if laundered:
         # Loud, and in the one line a human is guaranteed to read.
         summary += (f" WARNING: {laundered} deal(s) are shown here only because rot was "
@@ -793,4 +877,5 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
 
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
-                            candidates_found=candidates_found, uncalled=uncalled)
+                            candidates_found=candidates_found, uncalled=uncalled,
+                            hidden_silence=hidden)
