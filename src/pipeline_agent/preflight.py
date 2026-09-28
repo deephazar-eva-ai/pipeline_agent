@@ -51,6 +51,15 @@ PROBES: tuple[tuple[str, str], ...] = (
     ("Activity", "ok"),
 )
 
+# Read by the canonical task but not required by it: without Party the
+# supplier exclusion is skipped and the answer says so. Probed so a READY
+# preflight covers every input the task reads (2026-09-28: Party was added to
+# the task and not to preflight), but it never blocks readiness and never
+# counts as drift.
+OPTIONAL_PROBES: tuple[tuple[str, str], ...] = (
+    ("Party", "ok"),
+)
+
 SALES_ENTITIES = ("Deal", "Activity")
 
 # Size of the catalogue this credential last served. Recorded so the catalogue
@@ -87,6 +96,7 @@ class PreflightReport:
     missing_canonical_tools: list[str] = field(default_factory=list)
     unexpected_generic_tools: list[str] = field(default_factory=list)
     probes: list[dict] = field(default_factory=list)
+    optional_probes: list[dict] = field(default_factory=list)
     gate_g1: str = "inconclusive"
     canonical_task_ready: bool = False
     changes_from_recorded_state: list[str] = field(default_factory=list)
@@ -194,6 +204,16 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
         if probe["outcome"] != expected:
             report.changes_from_recorded_state.append(
                 f"{entity}: expected {expected}, got {probe['outcome']} ({probe['detail']})")
+
+    for entity, expected in OPTIONAL_PROBES:
+        probe = await probe_entity(client, entity)
+        probe["expected"] = expected
+        probe["optional"] = True
+        report.optional_probes.append(probe)
+        if probe["outcome"] != expected:
+            report.notes.append(
+                f"optional {entity}: {probe['outcome']} ({probe['detail']}) - the canonical "
+                f"task will run without it (supplier-side deals will NOT be excluded)")
 
     report.gate_g1 = _gate_g1_verdict(report.probes)
     # Readiness needs EVERY probe green, not just the Gate G1 verdict.

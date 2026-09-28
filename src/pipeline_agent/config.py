@@ -25,6 +25,20 @@ _SECRET_FIELDS = ("mcp_token",)
 # rejected with "This tool is not available to your seat".
 DEFAULT_MCP_TOOL_SURFACE = "entity_scoped"
 
+# Which business a URL serves. The tenant used to default to "suryodaya"
+# whatever the URL, so Keystone runs were recorded as Suryodaya in their own
+# artifacts (2026-09-28, run 20260928T091641Z). It is now derived from the URL,
+# and an explicit AGENTSWITCH_TENANT that contradicts the URL is refused.
+KNOWN_TENANT_HOSTS = {
+    "agentswitch.theschoolofai.in": "suryodaya",
+    "class.agentswitch.theschoolofai.in": "keystone",
+}
+
+
+def tenant_for_url(url: str) -> str:
+    from urllib.parse import urlparse
+    return KNOWN_TENANT_HOSTS.get((urlparse(url).hostname or "").lower(), "unknown")
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -42,7 +56,8 @@ class Settings:
             mcp_url=e.get("AGENTSWITCH_MCP_URL", ""),
             mcp_token=e.get("AGENTSWITCH_MCP_TOKEN", ""),
             mcp_tool_surface=e.get("MCP_TOOL_SURFACE", DEFAULT_MCP_TOOL_SURFACE),
-            tenant=e.get("AGENTSWITCH_TENANT", "suryodaya"),
+            tenant=(e.get("AGENTSWITCH_TENANT")
+                    or tenant_for_url(e.get("AGENTSWITCH_MCP_URL", ""))),
             model_name=e.get("MODEL_NAME", ""),
             output_dir=e.get("OUTPUT_DIR", "runs"),
         )
@@ -70,3 +85,9 @@ class Settings:
                 ". Copy .env.example to .env and fill these in, or run with "
                 "--mode dry-run to exercise the harness against the stub client."
             )
+        served = tenant_for_url(self.mcp_url)
+        if served != "unknown" and self.tenant != served:
+            raise RuntimeError(
+                f"AGENTSWITCH_TENANT is {self.tenant!r} but {self.mcp_url} serves "
+                f"{served!r}. Fix or unset AGENTSWITCH_TENANT; it is derived from the "
+                f"URL when unset.")

@@ -417,6 +417,15 @@ class ActivityIndex:
     # Done activities whose `due_date` is not a date. Skipped, and counted so
     # the summary can say so rather than crash or silently drop them.
     unparseable_dates: int = 0
+    # Activity rows seen more than once while paging (see run_canonical_task).
+    duplicate_rows: int = 0
+    seen_ids: set[str] = field(default_factory=set)
+    # The raw unreadable value, by deal and by party: a completed contact
+    # whose date is unknown is still a contact. Without this the deal read
+    # `never_contacted` - a false claim - where `insufficient_evidence` is
+    # the truth (catalogue case E-08).
+    undated_contact_by_deal: dict[str, str] = field(default_factory=dict)
+    undated_contact_by_party: dict[str, str] = field(default_factory=dict)
     # False on an index built by hand without the contact fields; rot then
     # falls back to `last_touch_by_deal` rather than reading "never touched".
     contact_dates_indexed: bool = False
@@ -449,6 +458,13 @@ class ActivityIndex:
                 return by_deal, "deal"
             if by_party:
                 return by_party, "party"
+            # No dated contact, but a completed one with an unreadable date:
+            # hand the raw value on, so classify_contact says
+            # INSUFFICIENT_EVIDENCE instead of NEVER_CONTACTED.
+            if deal_id in self.undated_contact_by_deal:
+                return self.undated_contact_by_deal[deal_id], "deal"
+            if party_id in self.undated_contact_by_party:
+                return self.undated_contact_by_party[party_id], "party"
             return None, "none"
         if deal_id and deal_id in self.last_done_by_deal:
             return self.last_done_by_deal[deal_id], "deal"
@@ -526,6 +542,12 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
         if not records:
             return index
         for activity in records:
+            row_id = activity.get("id")
+            if row_id is not None:
+                if row_id in index.seen_ids:
+                    index.duplicate_rows += 1
+                    continue
+                index.seen_ids.add(row_id)
             deal_id, party_id = activity.get("deal_id"), activity.get("party_id")
             due = activity.get("due_date")
 
@@ -553,6 +575,11 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                 day = _iso_day(due)
                 if due and not day:
                     index.unparseable_dates += 1
+                    if not authored_by_agent:
+                        if deal_id:
+                            index.undated_contact_by_deal.setdefault(deal_id, str(due))
+                        elif party_id:
+                            index.undated_contact_by_party.setdefault(party_id, str(due))
                 if day and day <= today and not authored_by_agent:
                     kind = str(activity.get("type") or "activity")
                     if party_id and not (index.first_contact_by_party.get(party_id, "9999")
@@ -932,6 +959,18 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     except PermissionDeniedError as e:
         return build_refusal(e, required_entities=["Deal"], tools_attempted=["list(Deal)"])
 
+    # One row per deal id. Offset paging over a book other teams are writing
+    # can hand back the same row twice (an insert shifts the next page); the
+    # duplicate used to be reported as a second rotting deal (catalogue S-14).
+    seen_ids: set = set()
+    unique_deals: list[dict] = []
+    for deal in all_deals:
+        if deal.get("id") in seen_ids:
+            continue
+        seen_ids.add(deal.get("id"))
+        unique_deals.append(deal)
+    duplicate_deals, all_deals = len(all_deals) - len(unique_deals), unique_deals
+
     now = dt.datetime.now(dt.timezone.utc)
     try:
         index = await load_activity_index(client, now=now)
@@ -1038,6 +1077,9 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         # cannot appear there. Say so instead of dropping it without a word.
         summary += (f" {len(no_party)} open deal(s) have no party and cannot appear in the "
                     f"uncalled list: {', '.join(str(d.get('id'))[:8] for d in no_party)}.")
+    if duplicate_deals or index.duplicate_rows:
+        summary += (f" {duplicate_deals} duplicate deal row(s) and {index.duplicate_rows} "
+                    f"duplicate activity row(s) came back from paging and were counted once.")
     if index.unparseable_dates:
         summary += (f" {index.unparseable_dates} completed activit(ies) have an unreadable "
                     f"due_date and were not counted as contact.")

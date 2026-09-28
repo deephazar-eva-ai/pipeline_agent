@@ -38,18 +38,31 @@ from pipeline_agent.preflight import PreflightReport, run_preflight
 CANONICAL_REQUEST = "Which deals are rotting, who has not been contacted, and what is the next action on each?"
 
 
+# One connection = one URL, one token, one tenant. They are taken from the real
+# environment or from .env as a set, never mixed: filling each missing one on
+# its own paired a Keystone token with .env's Suryodaya URL (and the reverse),
+# sending one instance's credential to the other instance's server
+# (2026-09-28, catalogue cases N-01/N-02).
+_CONNECTION_KEYS = ("AGENTSWITCH_MCP_URL", "AGENTSWITCH_MCP_TOKEN", "AGENTSWITCH_TENANT")
+
+
 def _load_dotenv(path: str = ".env") -> None:
     """No python-dotenv dependency for four lines of parsing. Never
-    overrides a variable already set in the real environment."""
+    overrides a variable already set in the real environment, and never
+    completes a half-set connection from the file (see `_CONNECTION_KEYS`)."""
     p = Path(path)
     if not p.is_file():
         return
+    connection_from_env = any(os.environ.get(k) for k in _CONNECTION_KEYS)
     for line in p.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        key = key.strip()
+        if key in _CONNECTION_KEYS and connection_from_env:
+            continue
+        os.environ.setdefault(key, value.strip())
 
 
 PREFLIGHT_REQUEST = ("Preflight: enumerate this credential's tool catalogue and probe "
