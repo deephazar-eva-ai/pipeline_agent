@@ -80,6 +80,12 @@ def _report_result(run: TaskRun, result: Any) -> None:
             since = "never called" if u.last_called is None else f"{u.days_since}d ({u.last_called})"
             print(f"  {u.party_name:<34} {since:<20} open deals={len(u.open_deal_ids)} "
                   f"value={u.open_deal_value:,.0f}")
+        if result.never_called_new:
+            print(f"\nnever_called_new ({len(result.never_called_new)}): never called, "
+                  f"in the book under the threshold")
+            for u in result.never_called_new:
+                print(f"  {u.party_name:<34} in book {u.days_since}d  open deals="
+                      f"{len(u.open_deal_ids)} value={u.open_deal_value:,.0f}")
         if result.excluded_deals:
             print(f"\nexcluded_deals ({len(result.excluded_deals)}): not in either answer")
             for x in result.excluded_deals:

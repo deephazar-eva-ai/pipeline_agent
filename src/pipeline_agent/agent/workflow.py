@@ -25,7 +25,7 @@ from pipeline_agent.agent.contract import (
     HiddenSilence, MaskedDeal, RefusalResult, UncalledParty,
 )
 from pipeline_agent.agent.refusal import build_refusal
-from pipeline_agent.mcp.client import MCPClient, PermissionDeniedError
+from pipeline_agent.mcp.client import MCPClient, MCPToolError, PermissionDeniedError
 
 DEFAULT_ROT_DAYS = 30  # schema default; overridden by the live CRMPreferences value when readable
 
@@ -410,6 +410,13 @@ class ActivityIndex:
     # still a call to that customer.
     last_call_by_party: dict[str, str] = field(default_factory=dict)
     last_call_by_deal: dict[str, str] = field(default_factory=dict)
+    # Earliest completed contact of any type, by party and by deal: evidence
+    # of how long a customer relationship has existed (see `find_uncalled`).
+    first_contact_by_party: dict[str, str] = field(default_factory=dict)
+    first_contact_by_deal: dict[str, str] = field(default_factory=dict)
+    # Done activities whose `due_date` is not a date. Skipped, and counted so
+    # the summary can say so rather than crash or silently drop them.
+    unparseable_dates: int = 0
     # False on an index built by hand without the contact fields; rot then
     # falls back to `last_touch_by_deal` rather than reading "never touched".
     contact_dates_indexed: bool = False
@@ -422,8 +429,27 @@ class ActivityIndex:
         return max((d for d in dates if d), default=None)
 
     def last_contacted(self, deal: dict) -> tuple[str | None, str]:
-        """Most recent completed contact, and which linkage proved it."""
+        """Most recent completed contact, and which linkage proved it.
+
+        The same definition rot uses (`last_contact_by_deal`, else contact
+        with the party on rows carrying no `deal_id`; done, dated, not in the
+        future, not the agent's own). It used to read `last_done_by_*`, which
+        keep the agent's rows and future-dated rows and prefer an older
+        deal-linked date over a newer party contact: on Keystone (2026-09-28)
+        18 of 23 rotting rows carried two different "last contact" dates, and
+        3 said `recently_contacted` on deals rotting at 33-34 days.
+
+        A hand-built index without contact dates keeps the old reading.
+        """
         deal_id, party_id = deal.get("id"), deal.get("party_id")
+        if self.contact_dates_indexed:
+            by_deal = self.last_contact_by_deal.get(deal_id or "")
+            by_party = self.last_unlinked_contact_by_party.get(party_id or "")
+            if by_deal and (not by_party or by_deal >= by_party):
+                return by_deal, "deal"
+            if by_party:
+                return by_party, "party"
+            return None, "none"
         if deal_id and deal_id in self.last_done_by_deal:
             return self.last_done_by_deal[deal_id], "deal"
         if party_id and party_id in self.last_done_by_party:
@@ -444,6 +470,18 @@ class ActivityIndex:
             # agent wrote has party_id=None), so this branch is always human.
             return self.open_by_party[party_id], "party", False
         return None, "none", False
+
+
+def _iso_day(value: Any) -> str:
+    """`YYYY-MM-DD` if `value` starts with a real ISO date, else "". A string
+    compare alone let '13/40/2026' through as a date that sorts before 2026,
+    and `date.fromisoformat` then crashed the whole run downstream."""
+    day = str(value or "")[:10]
+    try:
+        dt.date.fromisoformat(day)
+    except ValueError:
+        return ""
+    return day
 
 
 def _later(current: str | None, candidate: str) -> bool:
@@ -512,9 +550,16 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                     index.last_done_by_party[party_id] = due
                 # A completed contact that has actually happened: dated, not
                 # in the future, and not the agent's own bookkeeping.
-                day = str(due)[:10] if due else ""
+                day = _iso_day(due)
+                if due and not day:
+                    index.unparseable_dates += 1
                 if day and day <= today and not authored_by_agent:
                     kind = str(activity.get("type") or "activity")
+                    if party_id and not (index.first_contact_by_party.get(party_id, "9999")
+                                         <= day):
+                        index.first_contact_by_party[party_id] = day
+                    if deal_id and not (index.first_contact_by_deal.get(deal_id, "9999") <= day):
+                        index.first_contact_by_deal[deal_id] = day
                     if deal_id and _later(index.last_contact_by_deal.get(deal_id), day):
                         index.last_contact_by_deal[deal_id] = day
                         index.last_contact_type_by_deal[deal_id] = kind
@@ -530,7 +575,11 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
             else:
                 if deal_id and _prefer_open(index.open_by_deal.get(deal_id), activity, today):
                     index.open_by_deal[deal_id] = activity
-                if party_id and _prefer_open(index.open_by_party.get(party_id), activity, today):
+                # Party-level only when the row names no deal: an open task on a
+                # sibling deal is that deal's action, not this one's. Indexing it
+                # here reported deal A "overdue" on the strength of deal B's task.
+                if party_id and not deal_id and _prefer_open(
+                        index.open_by_party.get(party_id), activity, today):
                     index.open_by_party[party_id] = activity
         index.scanned += len(records)
         offset += len(records)
@@ -674,8 +723,22 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
     return ActionStatus.CREATED, created, reasons
 
 
+def relationship_days(party_id: str, party_deals: list[dict], index: ActivityIndex,
+                      now: dt.datetime) -> int:
+    """How long this customer has demonstrably been in the book: from the
+    earliest of its first completed contact (by party or on any of its open
+    deals) and its open deals' `created_at`. No evidence at all reads as 0,
+    so an undated customer is never reported as uncalled for 30 days."""
+    dates = [index.first_contact_by_party.get(party_id)]
+    dates += [index.first_contact_by_deal.get(d.get("id")) for d in party_deals]
+    dates += [_iso_day(d.get("created_at")) for d in party_deals]
+    dates = [d for d in dates if d]
+    return (now.date() - dt.date.fromisoformat(min(dates))).days if dates else 0
+
+
 def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
-                  threshold_days: int) -> list[UncalledParty]:
+                  threshold_days: int, *,
+                  too_new: list[UncalledParty] | None = None) -> list[UncalledParty]:
     """`pipeline.uncalled_30_days`: who, among customers with open pipeline,
     has had no completed call in `threshold_days`.
 
@@ -698,6 +761,22 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
         last = index.last_called(party_id, deal_ids)
         days = None if last is None else (now.date() - dt.date.fromisoformat(last)).days
         if days is not None and days < threshold_days:
+            continue
+        age = relationship_days(party_id, party_deals, index, now) if last is None else None
+        if age is not None and age < threshold_days:
+            # Never called, but the relationship is younger than the threshold:
+            # a customer whose first deal opened today has not gone 30 days
+            # without a call. Listing it (as every fresh fixture customer was
+            # on 2026-09-28) buries the real silences under new names. Not
+            # dropped either - collected into `too_new` so the caller can
+            # report it (on Suryodaya, whose book is 16 days old, that is 35
+            # never-called customers).
+            if too_new is not None:
+                too_new.append(UncalledParty(
+                    party_id=party_id,
+                    party_name=str(party_deals[0].get("_party_id_display") or party_id),
+                    last_called=None, days_since=age, open_deal_ids=deal_ids,
+                    open_deal_value=float(sum(d.get("value") or 0 for d in party_deals))))
             continue
         rows.append(UncalledParty(
             party_id=party_id,
@@ -722,13 +801,16 @@ def is_supplier_only(roles: set[str] | None) -> bool:
     return bool(roles) and SUPPLIER_ROLE in roles and not (roles & SALES_ROLES)
 
 
-async def load_party_roles(client: MCPClient, *,
-                           page_size: int = 1000) -> dict[str, set[str]] | None:
-    """Active roles per party id, or None when Party is not readable.
+async def load_party_roles(client: MCPClient, *, page_size: int = 1000
+                           ) -> tuple[dict[str, set[str]] | None, str]:
+    """(active roles per party id, "") - or (None, why) when Party could not
+    be read.
 
     Party is not a required entity - the answer is still correct without it,
-    only the supplier exclusion cannot be applied - so a refusal degrades to
-    None and the caller says so, rather than refusing the whole task.
+    only the supplier exclusion cannot be applied - so ANY tool failure
+    degrades to None and the caller says why, rather than refusing or
+    crashing the whole task. Catching only the permission case let a
+    transient `list(Party)` error kill a complete rot answer.
     """
     roles: dict[str, set[str]] = {}
     offset = 0
@@ -737,16 +819,18 @@ async def load_party_roles(client: MCPClient, *,
             resp = await client.list_("Party", limit=page_size, offset=offset)
             records = (resp.get("records") or []) if isinstance(resp, dict) else []
             if not records:
-                return roles
+                return roles, ""
             for party in records:
                 roles[party.get("id")] = {
                     str(r.get("role")) for r in (party.get("roles") or [])
                     if isinstance(r, dict) and r.get("active", True)}
             offset += len(records)
             if _last_page(resp, offset, len(records), page_size):
-                return roles
+                return roles, ""
     except PermissionDeniedError:
-        return None
+        return None, "Party is not readable from this seat"
+    except MCPToolError as e:
+        return None, f"Party could not be read ({e})"
 
 
 def _explain_fresh(deal: dict, index: ActivityIndex, now: dt.datetime) -> MaskedDeal:
@@ -858,11 +942,11 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     # Supplier-side deals leave both answers. Calibration below still sees
     # every deal: it measures the platform's own line, which supplier deals
     # are as good evidence for as any.
-    party_roles = await load_party_roles(client)
+    party_roles, party_error = await load_party_roles(client)
     if party_roles is None:
         excluded: list[dict] = []
-        exclusion_note = ("Party is not readable from this seat - supplier-side deals "
-                          "could not be identified and are NOT excluded.")
+        exclusion_note = (f"{party_error} - supplier-side deals could not be identified "
+                          f"and are NOT excluded.")
     else:
         excluded = [d for d in all_deals if not str(d.get("stage", "")).startswith("closed")
                     and is_supplier_only(party_roles.get(d.get("party_id")))]
@@ -928,7 +1012,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         scope += " " + "; ".join(scope_notes) + "."
     laundered = sum(1 for r in results
                     if r.rot_evidence.get("agent_write_suppressed_platform_signal"))
-    uncalled = find_uncalled(in_scope, index, now, threshold)
+    never_called_new: list[UncalledParty] = []
+    uncalled = find_uncalled(in_scope, index, now, threshold, too_new=never_called_new)
     hidden = find_hidden_silence(in_scope, index, now, uncalled, rotting_ids)
     summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
@@ -936,13 +1021,26 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                f"{sum(1 for r in results if r.action_status == ActionStatus.OVERDUE)} have an open "
                f"action that is overdue. "
                f"{len(uncalled)} customer(s) with open deals not called in {threshold} days "
-               f"({sum(1 for u in uncalled if u.last_called is None)} never called). "
+               f"({sum(1 for u in uncalled if u.last_called is None)} never called)"
+               + (f"; {len(never_called_new)} more never called but in the book under "
+                  f"{threshold} days - see never_called_new" if never_called_new else "")
+               + ". "
                f"Platform context: {calibration.note()}.")
     if excluded:
         summary += (f" {len(excluded)} open supplier-side deal(s) excluded from both answers "
                     f"(party role supplier, not customer/prospect) - see excluded_deals.")
     if exclusion_note:
         summary += f" {exclusion_note}"
+    no_party = [d for d in in_scope if not d.get("party_id")
+                and not str(d.get("stage", "")).startswith("closed")]
+    if no_party:
+        # `uncalled` answers "who"; a deal with no party has no who, so it
+        # cannot appear there. Say so instead of dropping it without a word.
+        summary += (f" {len(no_party)} open deal(s) have no party and cannot appear in the "
+                    f"uncalled list: {', '.join(str(d.get('id'))[:8] for d in no_party)}.")
+    if index.unparseable_dates:
+        summary += (f" {index.unparseable_dates} completed activit(ies) have an unreadable "
+                    f"due_date and were not counted as contact.")
     if hidden:
         # Stated in the summary, not only in `hidden_silence`: these deals are
         # absent from the rot list above, so a reader of that list alone would
@@ -965,7 +1063,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
                             candidates_found=candidates_found, uncalled=uncalled,
-                            hidden_silence=hidden,
+                            hidden_silence=hidden, never_called_new=never_called_new,
                             excluded_deals=[{
                                 "deal_id": d.get("id"), "title": d.get("title"),
                                 "party": d.get("_party_id_display") or d.get("party_id"),

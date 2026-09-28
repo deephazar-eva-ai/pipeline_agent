@@ -42,6 +42,20 @@ Exactly one of:
   `Party` is unreadable, nothing is excluded and the summary says so.
   "Called" means `type == "call"` only; meetings and emails are contact but not
   calls (seat-owner decision, 2026-09-28).
+  A never-called customer is in `uncalled` only if the relationship is at
+  least `deal_rot_days` old. The relationship age is measured from the
+  earliest of its first completed contact and its open deals' `created_at`.
+  Younger never-called customers go to `never_called_new` (`days_since` = the
+  relationship age), and the summary counts them. On Suryodaya, whose book is
+  16 days old, that is 35 customers.
+  One contact definition throughout: `contact_status` / `contact_evidence`
+  use exactly the contact date rot uses (done, dated on or before today, not
+  agent-authored, by deal or by party on rows with no `deal_id`). Before
+  2026-09-28, 18 of 23 Keystone rows reported two different dates.
+  Robustness: a done activity whose `due_date` is not a date is skipped and
+  counted in the summary; any failure to read `Party` (not only a permission
+  refusal) disables the supplier exclusion and says why; open deals with no
+  party are named in the summary, because they cannot appear in `uncalled`.
 - **`RefusalResult`** - returned instead of a partial/best-effort answer the
   moment a required entity (`Deal` or `Activity`) is inaccessible. Names the
   missing entities and every tool call attempted before giving up.
@@ -108,7 +122,10 @@ every open deal.
 Before any `Activity.create`:
 
 1. List open `Activity` records for the deal. If one already exists, stop -
-   `action_status=existing`, link it, do not create anything. If that existing
+   `action_status=existing`, link it, do not create anything. A party-level
+   match counts only open activities that name **no** deal. An open task on a
+   sibling deal belongs to that deal, and must not stand in for this deal's
+   next action. If that existing
    activity is one **this agent wrote**, it is still not duplicated, but
    `reasons` says plainly that it is the agent's own unactioned note and not
    evidence that anyone contacted the customer. If the existing activity is
