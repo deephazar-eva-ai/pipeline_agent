@@ -46,6 +46,15 @@ CANONICAL_REQUEST = "Which deals are rotting, who has not been contacted, and wh
 _CONNECTION_KEYS = ("AGENTSWITCH_MCP_URL", "AGENTSWITCH_MCP_TOKEN", "AGENTSWITCH_TENANT")
 
 
+def _non_negative_int(text: str) -> int:
+    """--limit must be >= 0: a negative value sliced the candidate list
+    (`[:-1]`) and silently dropped the worst-rot deal."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or more, got {value}")
+    return value
+
+
 def _load_dotenv(path: str = ".env") -> None:
     """No python-dotenv dependency for four lines of parsing. Never
     overrides a variable already set in the real environment, and never
@@ -210,7 +219,7 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=12,
                          help="maximum model turns for --task loop.")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")
-    parser.add_argument("--limit", type=int, default=None,
+    parser.add_argument("--limit", type=_non_negative_int, default=None,
                          help="act on at most N candidate deals, worst-rot first. Use it to "
                               "smoke-test a write on one deal before letting it loose on a "
                               "shared book; the answer reports the run as PARTIAL.")

@@ -136,9 +136,19 @@ async def load_rot_threshold(client: MCPClient) -> tuple[int, bool]:
     policy, unlike the Deal/Activity calls below."""
     resp = await client.list_("CRMPreferences", limit=1)
     records = resp.get("records", []) if isinstance(resp, dict) else []
-    if records and records[0].get("deal_rot_days") is not None:
-        return int(records[0]["deal_rot_days"]), True
-    return DEFAULT_ROT_DAYS, False
+    days = _positive_days(records[0].get("deal_rot_days")) if records else None
+    return (days, True) if days is not None else (DEFAULT_ROT_DAYS, False)
+
+
+def _positive_days(value: Any) -> int | None:
+    """A usable whole-day threshold, or None. `int()` alone crashed the run on
+    a string ("thirty", even "30.0"), and let 0 or a negative through - which
+    made every open deal "rotting" and every customer "uncalled"."""
+    try:
+        days = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return days if days > 0 else None
 
 
 def is_agent_authored(activity: dict) -> bool:
@@ -181,13 +191,15 @@ def _rot_age(deal: dict, index: ActivityIndex,
                                           index.last_unlinked_contact_by_party.get(
                                               deal.get("party_id"))) if d), default=None))
     if contact is not None:
-        return (now - contact).days, "contact"
+        return max(0, (now - contact).days), "contact"
     # `created_at` only when there has never been contact. It is not a floor
     # under a contact date: on Keystone it is the seeding timestamp too
     # (2026-09-16) on deals with contact history back to May, and flooring
     # with it masked 9 deals worth $616,838 exactly as `updated_at` had.
     opened = _parse_ts(deal.get("created_at"))
-    return (None, None) if opened is None else ((now - opened).days, "deal_opened")
+    # A `created_at` in the future (clock skew, bad import) reads as opened
+    # today, never as a negative age.
+    return (None, None) if opened is None else (max(0, (now - opened).days), "deal_opened")
 
 
 def platform_mirror_days(deal: dict, index: ActivityIndex, now: dt.datetime) -> int | None:
@@ -231,6 +243,16 @@ class RotCalibration:
         return f"rot boundary not measurable: using {self.boundary_days} ({self.basis})"
 
 
+def _platform_flags(deal: dict) -> bool:
+    """Does the platform itself call this deal rotting? Only a real level
+    string other than fresh/none says so. A missing or null `_rot_level` is
+    absence of evidence: counting it as a flag reported a deal contacted two
+    days ago as rotting, and would flag the whole book if the field vanished."""
+    level = deal.get("_rot_level")
+    return isinstance(level, str) and bool(level) and level not in (
+        ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
+
+
 def calibrate_rot_boundary(deals: list[dict], index: ActivityIndex, now: dt.datetime,
                             fallback: int = ROT_BOUNDARY_FALLBACK) -> RotCalibration:
     """Bracket the boundary between the oldest `fresh` deal and the youngest
@@ -245,8 +267,9 @@ def calibrate_rot_boundary(deals: list[dict], index: ActivityIndex, now: dt.date
     fresh_days: list[int] = []
     flagged_days: list[int] = []
     for deal in deals:
-        if deal.get("_rot_level") == ROT_LEVEL_NOT_APPLICABLE:
-            continue
+        level = deal.get("_rot_level")
+        if level == ROT_LEVEL_NOT_APPLICABLE or not isinstance(level, str) or not level:
+            continue  # no level, nothing to calibrate against
         if deal.get("id") in index.agent_written_deals:
             continue  # its level is exactly what we do not trust
         # The platform's age, not ours: this measures the platform's line.
@@ -301,7 +324,7 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
         return False, evidence
 
     days, age_basis = _rot_age(deal, index, now)
-    platform_flags = deal.get("_rot_level") not in (ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
+    platform_flags = _platform_flags(deal)
     independently_flags = days is not None and days >= boundary
     agent_wrote = deal.get("id") in index.agent_written_deals
     mirror = platform_mirror_days(deal, index, now) if agent_wrote else None
@@ -486,6 +509,18 @@ class ActivityIndex:
             # agent wrote has party_id=None), so this branch is always human.
             return self.open_by_party[party_id], "party", False
         return None, "none", False
+
+
+def _money(value: Any) -> float:
+    """A deal value as a number; anything unreadable counts as 0 rather than
+    crashing the whole answer (a string such as "1,000" raised TypeError)."""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        try:
+            return float(str(value).replace(",", ""))
+        except ValueError:
+            return 0.0
 
 
 def _iso_day(value: Any) -> str:
@@ -760,7 +795,7 @@ def relationship_days(party_id: str, party_deals: list[dict], index: ActivityInd
     dates += [index.first_contact_by_deal.get(d.get("id")) for d in party_deals]
     dates += [_iso_day(d.get("created_at")) for d in party_deals]
     dates = [d for d in dates if d]
-    return (now.date() - dt.date.fromisoformat(min(dates))).days if dates else 0
+    return max(0, (now.date() - dt.date.fromisoformat(min(dates))).days) if dates else 0
 
 
 def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
@@ -803,13 +838,13 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
                     party_id=party_id,
                     party_name=str(party_deals[0].get("_party_id_display") or party_id),
                     last_called=None, days_since=age, open_deal_ids=deal_ids,
-                    open_deal_value=float(sum(d.get("value") or 0 for d in party_deals))))
+                    open_deal_value=sum(_money(d.get("value")) for d in party_deals)))
             continue
         rows.append(UncalledParty(
             party_id=party_id,
             party_name=str(party_deals[0].get("_party_id_display") or party_id),
             last_called=last, days_since=days, open_deal_ids=deal_ids,
-            open_deal_value=float(sum(d.get("value") or 0 for d in party_deals))))
+            open_deal_value=sum(_money(d.get("value")) for d in party_deals)))
     rows.sort(key=lambda r: (r.days_since is not None, -(r.days_since or 0)))
     return rows
 
@@ -886,7 +921,7 @@ def _explain_fresh(deal: dict, index: ActivityIndex, now: dt.datetime) -> Masked
                                   if age_basis else "no usable date on the deal")
     return MaskedDeal(
         deal_id=deal_id, title=str(deal.get("title") or deal_id),
-        value=float(deal.get("value") or 0), stage=str(deal.get("stage") or ""),
+        value=_money(deal.get("value")), stage=str(deal.get("stage") or ""),
         looks_fresh_days=age,
         fresh_because=because, fresh_basis_date=basis, fresh_basis_detail=detail,
         last_contact=contact,
@@ -933,7 +968,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     try:
         threshold, used_live = await load_rot_threshold(client)
         threshold_note = ("" if used_live else
-                          "CRMPreferences.deal_rot_days unavailable - used schema default")
+                          f"CRMPreferences.deal_rot_days unavailable or not a positive number "
+                          f"- used the schema default of {DEFAULT_ROT_DAYS} days")
     except PermissionDeniedError as e:
         # CRMPreferences is NOT a required entity: the contract defines a
         # refusal as "the moment a REQUIRED entity is inaccessible", and names
@@ -964,12 +1000,15 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     # duplicate used to be reported as a second rotting deal (catalogue S-14).
     seen_ids: set = set()
     unique_deals: list[dict] = []
+    no_id = sum(1 for deal in all_deals if not deal.get("id"))
     for deal in all_deals:
+        if not deal.get("id"):
+            continue  # unaddressable: cannot be reported, acted on, or deduplicated
         if deal.get("id") in seen_ids:
             continue
         seen_ids.add(deal.get("id"))
         unique_deals.append(deal)
-    duplicate_deals, all_deals = len(all_deals) - len(unique_deals), unique_deals
+    duplicate_deals, all_deals = len(all_deals) - len(unique_deals) - no_id, unique_deals
 
     now = dt.datetime.now(dt.timezone.utc)
     try:
@@ -1024,7 +1063,11 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
             # asked for and are not in the candidate set - say which.
             scope_notes.append(f"requested deal(s) not among the rotting candidates: "
                                 f"{', '.join(sorted(missing))}")
-    if request.max_deals is not None:
+    if request.max_deals is not None and request.max_deals < 0:
+        # `assessed[:-1]` silently dropped the last candidate. A negative cap
+        # means nothing; run uncapped and say so.
+        scope_notes.append(f"ignored invalid --limit {request.max_deals}")
+    elif request.max_deals is not None:
         assessed = assessed[:request.max_deals]
 
     results: list[DealResult] = []
@@ -1077,6 +1120,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         # cannot appear there. Say so instead of dropping it without a word.
         summary += (f" {len(no_party)} open deal(s) have no party and cannot appear in the "
                     f"uncalled list: {', '.join(str(d.get('id'))[:8] for d in no_party)}.")
+    if no_id:
+        summary += f" {no_id} deal row(s) had no id and were skipped."
     if duplicate_deals or index.duplicate_rows:
         summary += (f" {duplicate_deals} duplicate deal row(s) and {index.duplicate_rows} "
                     f"duplicate activity row(s) came back from paging and were counted once.")
