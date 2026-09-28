@@ -96,9 +96,9 @@ class MaskedDeal:
     value: float
     stage: str
     looks_fresh_days: int | None     # the age the rot check used (independent_rot_days)
-    fresh_because: str               # "record_edit" | "non_call_activity"
+    fresh_because: str               # "non_call_activity" | "recently_opened" (| "platform_formula" | "no_age_data")
     fresh_basis_date: str | None     # the date that made it look fresh
-    fresh_basis_detail: str          # e.g. "deal record edited (not a customer contact)"
+    fresh_basis_detail: str          # e.g. "done meeting (not a call)", "deal opened recently"
     last_contact: str | None         # latest completed contact of any type
     days_since_contact: int | None
 
@@ -142,6 +142,11 @@ class CanonicalAnswer:
     # The subset of `uncalled` whose deals the rot check still reads as fresh,
     # each with the reason it looks fresh. Largest hidden value first.
     hidden_silence: list[HiddenSilence] = field(default_factory=list)
+    # Open deals left out of every list above, each with why. Today: supplier-
+    # side deals (party role supplier, not customer/prospect). Listed rather
+    # than silently dropped, so an excluded deal is never mistaken for a
+    # healthy one.
+    excluded_deals: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

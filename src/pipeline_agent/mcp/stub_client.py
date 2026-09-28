@@ -61,17 +61,21 @@ class StubMCPClient(MCPClient):
             "lead_scoring_enabled": False,
             "lead_score_threshold": None,
         }]
+        # Every deal carries `created_at`, as every live record does: rot ages
+        # from contact or, with none, from when the deal was opened - never from
+        # `updated_at` (a record edit). Set equal to `updated_at` here so each
+        # fixture keeps the age it was written to have.
         self._deals = [
             # Rotting; its party was contacted long ago and has an open action.
             {"id": "stub-deal-existing", "title": "Bench vice bulk order",
              "stage": "qualification", "party_id": _PARTY_CONTACTED,
              "_rot_level": "attention", "_rot_days": 8, "value": 264000.0,
-             "updated_at": _days_ago(8)},
+             "updated_at": _days_ago(8), "created_at": _days_ago(8)},
             # Rotting; nobody has ever contacted this party, nothing open.
             {"id": "stub-deal-needs-action", "title": "Lathe chuck enquiry",
              "stage": "new", "party_id": _PARTY_SILENT,
              "_rot_level": "attention", "_rot_days": 8, "value": 8000.0,
-             "updated_at": _days_ago(8)},
+             "updated_at": _days_ago(8), "created_at": _days_ago(8)},
             # The laundered case, and the reason this fixture exists at all.
             # The platform reads it as fresh/0 for exactly one reason: this
             # agent logged a task against it on an earlier run. Its customer
@@ -81,24 +85,24 @@ class StubMCPClient(MCPClient):
             {"id": "stub-deal-laundered", "title": "Surface grinder quote",
              "stage": "new", "party_id": _PARTY_SILENT,
              "_rot_level": "fresh", "_rot_days": 0, "value": 47000.0,
-             "updated_at": _days_ago(9)},
+             "updated_at": _days_ago(9), "created_at": _days_ago(9)},
             # Rotting, but the stage is not in the validated action map.
             {"id": "stub-deal-odd-stage", "title": "Despatch week 42",
              "stage": "Bench Vice 7398", "party_id": _PARTY_SILENT,
              "_rot_level": "attention", "_rot_days": 8, "value": 1000.0,
-             "updated_at": _days_ago(8)},
+             "updated_at": _days_ago(8), "created_at": _days_ago(8)},
             # Fresh - must not be reported as rotting.
             {"id": "stub-deal-fresh", "title": "New web enquiry",
              "stage": "new", "party_id": _PARTY_SILENT,
              "_rot_level": "fresh", "_rot_days": 2, "value": 500.0,
-             "updated_at": _days_ago(2)},
+             "updated_at": _days_ago(2), "created_at": _days_ago(2)},
             # Closed - out of scope regardless of age.
             # Closed deals read as none/0 regardless of true age on the live
             # platform, so this one is deliberately old underneath.
             {"id": "stub-deal-closed", "title": "Won last quarter",
              "stage": "closed_won", "party_id": _PARTY_CONTACTED,
              "_rot_level": "none", "_rot_days": 0, "value": 99000.0,
-             "updated_at": _days_ago(40)},
+             "updated_at": _days_ago(40), "created_at": _days_ago(40)},
         ]
         self._activities = [
             {"id": "stub-act-done", "subject": "Trade call", "type": "call",

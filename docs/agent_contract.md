@@ -29,13 +29,19 @@ Exactly one of:
   Also `hidden_silence`: the customers in `uncalled` that still have open deals
   **missing from the rotting list**, which is where the two goals disagree. Each
   `HiddenSilence` lists its `masked_deals`. For each one, `fresh_because`
-  (`record_edit` or `non_call_activity`), `fresh_basis_date` and
+  (`non_call_activity` or `recently_opened`), `fresh_basis_date` and
   `fresh_basis_detail` say what made the deal look fresh, and `last_contact` /
   `days_since_contact` give its real age by contact alone. Largest hidden value
-  first. When this list is non-empty, the `summary` states it too, because a
-  reader of the rot list alone would never see these deals. Measured on
-  Keystone on 2026-09-28: 5 customers, 13 deals, $963,392, all masked by one
-  bulk record edit on 2026-09-16 and none by emails or meetings.
+  first. When this list is non-empty, the `summary` states it too.
+  History: on 2026-09-28 it first found 5 Keystone customers (13 deals, $963,392)
+  masked by a bulk record edit. That finding is why `updated_at` stopped counting
+  toward rot; with that rule, Keystone's hidden silence is empty.
+  Also `excluded_deals`: open deals left out of **both** answers, each with a
+  reason. Today these are supplier-side deals, whose party has the `supplier`
+  role and neither `customer` nor `prospect` (seat-owner decision, 2026-09-28). If
+  `Party` is unreadable, nothing is excluded and the summary says so.
+  "Called" means `type == "call"` only; meetings and emails are contact but not
+  calls (seat-owner decision, 2026-09-28).
 - **`RefusalResult`** - returned instead of a partial/best-effort answer the
   moment a required entity (`Deal` or `Activity`) is inaccessible. Names the
   missing entities and every tool call attempted before giving up.
@@ -65,7 +71,12 @@ A deal is a candidate if any of these flags it:
    is `attention` on Suryodaya and `warning` on Keystone);
 2. days since the last **genuine contact** - the latest done, non-agent
    Activity's `due_date` on or before today, by deal or by party on rows with
-   no `deal_id` - or `deal.updated_at`, reaching `deal_rot_days`;
+   no `deal_id` - reaching `deal_rot_days`. A deal with no contact at all ages
+   from `deal.created_at`. `deal.updated_at` never counts: a record edit is
+   not customer contact (seat-owner decision, 2026-09-28). `created_at` is
+   not a floor under a contact date either, because on Keystone it is a
+   seeding timestamp. Evidence field `age_basis` says `contact` or
+   `deal_opened`;
 3. on a deal this agent has written to, the platform's formula with the
    agent's rows excluded, reaching the calibrated platform boundary (the
    laundering defence below).

@@ -150,26 +150,44 @@ def is_agent_authored(activity: dict) -> bool:
 
 def independent_rot_days(deal: dict, index: ActivityIndex,
                           now: dt.datetime) -> int | None:
-    """Days since anyone last genuinely touched this deal.
+    """Days since this deal last saw genuine customer contact.
 
-    The later of `deal.updated_at` and the latest completed, non-agent contact
-    with the deal - linked by `deal_id`, or by `party_id` on rows that carry
-    no `deal_id`. Contact is dated by `due_date`, not `created_at`: see the
-    Keystone note above for why an insert timestamp is not a contact date.
+    The latest completed, non-agent contact - linked by `deal_id`, or by
+    `party_id` on rows that carry no `deal_id` - dated by `due_date`, not
+    `created_at` (see the Keystone note above: an insert timestamp is not a
+    contact date). Only a deal nobody has ever contacted ages from when it was
+    opened (`deal.created_at`).
 
-    `last_touch_by_deal` (the platform's `created_at` input) is still read
-    when no contact date is indexed, so an index built without the contact
-    fields degrades to the old platform-mirroring behaviour instead of
-    silently reporting every deal as untouched.
+    `deal.updated_at` does NOT count - decided by the seat owner 2026-09-28.
+    An edit to the record is not contact with the customer: on Keystone a
+    bulk edit on 2026-09-16 made 13 deals worth $963,392 read 11 days old
+    while their customers had gone 35-127 days without contact.
+
+    An index built by hand without contact dates (`contact_dates_indexed`
+    False) keeps the old platform-mirroring formula rather than reading every
+    deal as untouched.
     """
-    by_deal = (index.last_contact_by_deal if index.contact_dates_indexed
-               else index.last_touch_by_deal)
-    basis = max([ts for ts in (_parse_ts(deal.get("updated_at")),
-                                _parse_ts(by_deal.get(deal.get("id"))),
-                                _parse_ts(index.last_unlinked_contact_by_party.get(
-                                    deal.get("party_id"))))
-                 if ts is not None], default=None)
-    return None if basis is None else (now - basis).days
+    return _rot_age(deal, index, now)[0]
+
+
+def _rot_age(deal: dict, index: ActivityIndex,
+             now: dt.datetime) -> tuple[int | None, str | None]:
+    """(age in days, what the age is measured from) - the basis travels into
+    the evidence: "contact" or "deal_opened", or "legacy" on a hand-built index."""
+    if not index.contact_dates_indexed:
+        days = platform_mirror_days(deal, index, now)
+        return days, None if days is None else "legacy"
+    contact = _parse_ts(max((d for d in (index.last_contact_by_deal.get(deal.get("id")),
+                                          index.last_unlinked_contact_by_party.get(
+                                              deal.get("party_id"))) if d), default=None))
+    if contact is not None:
+        return (now - contact).days, "contact"
+    # `created_at` only when there has never been contact. It is not a floor
+    # under a contact date: on Keystone it is the seeding timestamp too
+    # (2026-09-16) on deals with contact history back to May, and flooring
+    # with it masked 9 deals worth $616,838 exactly as `updated_at` had.
+    opened = _parse_ts(deal.get("created_at"))
+    return (None, None) if opened is None else ((now - opened).days, "deal_opened")
 
 
 def platform_mirror_days(deal: dict, index: ActivityIndex, now: dt.datetime) -> int | None:
@@ -282,7 +300,7 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
         evidence["excluded"] = "closed stage"
         return False, evidence
 
-    days = independent_rot_days(deal, index, now)
+    days, age_basis = _rot_age(deal, index, now)
     platform_flags = deal.get("_rot_level") not in (ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
     independently_flags = days is not None and days >= boundary
     agent_wrote = deal.get("id") in index.agent_written_deals
@@ -291,6 +309,7 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
 
     evidence.update({
         "independent_rot_days": days,
+        "age_basis": age_basis,
         "rot_boundary_days": boundary,
         "platform_mirror_days": mirror,
         "platform_boundary_days": calibration.boundary_days,
@@ -689,10 +708,52 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
     return rows
 
 
+# A deal is supplier-side when its party is a supplier and nothing that makes
+# it a sales counterparty. Both goals are about selling; the seat owner ruled
+# on 2026-09-28 that supplier deals are out of both answers. On Keystone that
+# is Apex Metals (consignment stock) and Tuscarawas Machining (overflow
+# capacity) - $0 purchase-side agreements tracked in the CRM on purpose.
+SUPPLIER_ROLE = "supplier"
+SALES_ROLES = frozenset({"customer", "prospect"})
+
+
+def is_supplier_only(roles: set[str] | None) -> bool:
+    """None (roles unknown) is never supplier-only: unknown is not excluded."""
+    return bool(roles) and SUPPLIER_ROLE in roles and not (roles & SALES_ROLES)
+
+
+async def load_party_roles(client: MCPClient, *,
+                           page_size: int = 1000) -> dict[str, set[str]] | None:
+    """Active roles per party id, or None when Party is not readable.
+
+    Party is not a required entity - the answer is still correct without it,
+    only the supplier exclusion cannot be applied - so a refusal degrades to
+    None and the caller says so, rather than refusing the whole task.
+    """
+    roles: dict[str, set[str]] = {}
+    offset = 0
+    try:
+        while True:
+            resp = await client.list_("Party", limit=page_size, offset=offset)
+            records = (resp.get("records") or []) if isinstance(resp, dict) else []
+            if not records:
+                return roles
+            for party in records:
+                roles[party.get("id")] = {
+                    str(r.get("role")) for r in (party.get("roles") or [])
+                    if isinstance(r, dict) and r.get("active", True)}
+            offset += len(records)
+            if _last_page(resp, offset, len(records), page_size):
+                return roles
+    except PermissionDeniedError:
+        return None
+
+
 def _explain_fresh(deal: dict, index: ActivityIndex, now: dt.datetime) -> MaskedDeal:
-    """Why does the rot check read this deal as fresh? Whichever input set
-    `independent_rot_days` - a record edit or a completed non-call contact -
-    named, with its date, next to the real age by contact alone."""
+    """Why does the rot check read this deal as fresh although its customer
+    has not been called? Whichever input set its age, named with its date:
+    a recent completed contact that was not a call, or a recently opened
+    deal. (A record edit no longer can - `updated_at` does not count.)"""
     deal_id, party_id = deal.get("id"), deal.get("party_id")
     by_deal = index.last_contact_by_deal.get(deal_id)
     by_party = index.last_unlinked_contact_by_party.get(party_id)
@@ -701,17 +762,21 @@ def _explain_fresh(deal: dict, index: ActivityIndex, now: dt.datetime) -> Masked
     else:
         contact, kind = by_party, index.last_unlinked_contact_type_by_party.get(
             party_id, "activity")
-    edited = str(deal.get("updated_at") or "")[:10] or None
 
-    if edited and (not contact or edited >= contact):
-        because, basis, detail = ("record_edit", edited,
-                                  "deal record edited (not a customer contact)")
-    else:
+    age, age_basis = _rot_age(deal, index, now)
+    if age_basis == "contact":
         because, basis, detail = "non_call_activity", contact, f"done {kind} (not a call)"
+    elif age_basis == "deal_opened":
+        because, basis, detail = ("recently_opened", str(deal.get("created_at") or "")[:10],
+                                  "deal opened recently")
+    else:  # hand-built index, or no date at all
+        because, basis, detail = ("platform_formula" if age_basis else "no_age_data",
+                                  None, "age taken from the platform formula"
+                                  if age_basis else "no usable date on the deal")
     return MaskedDeal(
         deal_id=deal_id, title=str(deal.get("title") or deal_id),
         value=float(deal.get("value") or 0), stage=str(deal.get("stage") or ""),
-        looks_fresh_days=independent_rot_days(deal, index, now),
+        looks_fresh_days=age,
         fresh_because=because, fresh_basis_date=basis, fresh_basis_detail=detail,
         last_contact=contact,
         days_since_contact=(None if not contact
@@ -728,9 +793,9 @@ def find_hidden_silence(deals: list[dict], index: ActivityIndex, now: dt.datetim
     That disagreement is the finding. A reader of the rot report alone sees
     those deals as healthy; a reader of the uncalled list alone sees a name
     with no hint that the rot report vouched for it. Each masked deal says
-    what made it look fresh - on Keystone that was a bulk record edit on
-    2026-09-16, not a call, an email or a meeting - so nobody has to
-    re-derive it, and nobody repeats the guess that emails were the cause.
+    what made it look fresh, so nobody has to re-derive it. (On Keystone on
+    2026-09-28 every masked deal was a bulk record edit on 2026-09-16 - which
+    is why record edits stopped counting toward rot the same day.)
 
     Pure. Largest hidden value first: the question is where money is going
     quiet, and a $0 deal going quiet is not the same news.
@@ -790,13 +855,28 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         return build_refusal(e, required_entities=["Activity"],
                               tools_attempted=["list(Deal)", "list(Activity)"])
 
+    # Supplier-side deals leave both answers. Calibration below still sees
+    # every deal: it measures the platform's own line, which supplier deals
+    # are as good evidence for as any.
+    party_roles = await load_party_roles(client)
+    if party_roles is None:
+        excluded: list[dict] = []
+        exclusion_note = ("Party is not readable from this seat - supplier-side deals "
+                          "could not be identified and are NOT excluded.")
+    else:
+        excluded = [d for d in all_deals if not str(d.get("stage", "")).startswith("closed")
+                    and is_supplier_only(party_roles.get(d.get("party_id")))]
+        exclusion_note = ""
+    excluded_ids = {d.get("id") for d in excluded}
+    in_scope = [d for d in all_deals if d.get("id") not in excluded_ids]
+
     # Selection needs the Activity index, so it happens here rather than in
     # the Deal read. Rot is aged from genuine contact and judged against the
     # configured threshold; the calibrated platform boundary is reported as
     # context only (see `assess_rot`).
     calibration = calibrate_rot_boundary(all_deals, index, now)
     assessed: list[tuple[dict, dict]] = []
-    for deal in all_deals:
+    for deal in in_scope:
         candidate, evidence = assess_rot(deal, index, now, calibration,
                                           threshold_days=threshold)
         if candidate:
@@ -848,8 +928,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         scope += " " + "; ".join(scope_notes) + "."
     laundered = sum(1 for r in results
                     if r.rot_evidence.get("agent_write_suppressed_platform_signal"))
-    uncalled = find_uncalled(all_deals, index, now, threshold)
-    hidden = find_hidden_silence(all_deals, index, now, uncalled, rotting_ids)
+    uncalled = find_uncalled(in_scope, index, now, threshold)
+    hidden = find_hidden_silence(in_scope, index, now, uncalled, rotting_ids)
     summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
                f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open, "
@@ -858,6 +938,11 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                f"{len(uncalled)} customer(s) with open deals not called in {threshold} days "
                f"({sum(1 for u in uncalled if u.last_called is None)} never called). "
                f"Platform context: {calibration.note()}.")
+    if excluded:
+        summary += (f" {len(excluded)} open supplier-side deal(s) excluded from both answers "
+                    f"(party role supplier, not customer/prospect) - see excluded_deals.")
+    if exclusion_note:
+        summary += f" {exclusion_note}"
     if hidden:
         # Stated in the summary, not only in `hidden_silence`: these deals are
         # absent from the rot list above, so a reader of that list alone would
@@ -866,8 +951,10 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
             f" HIDDEN SILENCE: {len(hidden)} customer(s) not called in {threshold}+ days "
             f"have {sum(len(h.masked_deals) for h in hidden)} open deal(s) worth "
             f"{sum(h.masked_value for h in hidden):,.0f} that the rot check reads as fresh "
-            f"({sum(1 for h in hidden for m in h.masked_deals if m.fresh_because == 'record_edit')}"
-            f" only because the deal record was edited) - see hidden_silence.")
+            f"({sum(1 for h in hidden for m in h.masked_deals if m.fresh_because == 'non_call_activity')}"
+            f" kept fresh by non-call contact, "
+            f"{sum(1 for h in hidden for m in h.masked_deals if m.fresh_because == 'recently_opened')}"
+            f" recently opened) - see hidden_silence.")
     if laundered:
         # Loud, and in the one line a human is guaranteed to read.
         summary += (f" WARNING: {laundered} deal(s) are shown here only because rot was "
@@ -878,4 +965,10 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
                             candidates_found=candidates_found, uncalled=uncalled,
-                            hidden_silence=hidden)
+                            hidden_silence=hidden,
+                            excluded_deals=[{
+                                "deal_id": d.get("id"), "title": d.get("title"),
+                                "party": d.get("_party_id_display") or d.get("party_id"),
+                                "value": d.get("value"),
+                                "reason": "supplier-side: party role supplier, "
+                                          "not customer/prospect"} for d in excluded])
