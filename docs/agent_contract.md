@@ -19,7 +19,13 @@ Exactly one of:
 
 - **`CanonicalAnswer`** - `deal_rot_days` (the threshold actually used, and
   whether it came from a live read), `analyzed_at`, one `DealResult` per
-  rotting deal, and a one-line `summary`. Sorted by rot severity.
+  rotting deal, and a one-line `summary`. Sorted by rot severity. Also
+  `uncalled`: one `UncalledParty` per customer with an open deal and no
+  completed call in `deal_rot_days` (goal `pipeline.uncalled_30_days`) -
+  `party_name`, `last_called` (None = never), `days_since`, `open_deal_ids`,
+  `open_deal_value`. Keyed on the party, not the deal: a call logged against
+  one deal of a customer still counts for its other deals. Only `type=call`
+  counts, only done, only dated on or before today. Never-called first.
 - **`RefusalResult`** - returned instead of a partial/best-effort answer the
   moment a required entity (`Deal` or `Activity`) is inaccessible. Names the
   missing entities and every tool call attempted before giving up.
@@ -34,17 +40,30 @@ Each `DealResult` carries, separately, not folded into one verdict:
 
 | Field | Meaning |
 |---|---|
-| `rot_evidence` | the platform's own `_rot_level`/`_rot_days`, **and** `independent_rot_days` - the same number recomputed with this agent's own Activity rows excluded - plus the `rot_boundary_days` in force and which of the two signals flagged the deal. When the platform calls a deal fresh only because the agent wrote to it, the row also carries `agent_write_suppressed_platform_signal: true` and a plain-language `note` saying so |
+| `rot_evidence` | the platform's own `_rot_level`/`_rot_days`, **and** `independent_rot_days` - days since the last genuine contact (`last_contact`) or deal update, judged against `rot_boundary_days` (= `deal_rot_days`) - plus, on deals this agent wrote to, `platform_mirror_days` against `platform_boundary_days`, and which signals flagged the deal. When the platform calls a deal fresh only because the agent wrote to it, the row also carries `agent_write_suppressed_platform_signal: true` and a plain-language `note` saying so |
 | `contact_status` | `never_contacted` / `not_contacted_since_threshold` / `recently_contacted` / `insufficient_evidence` |
 | `contact_evidence` | the date(s)/channel that classification was based on |
-| `action_status` | `existing` / `created` / `recommended` / `needs_human_review` / `unavailable` |
+| `action_status` | `existing` / `overdue` / `created` / `recommended` / `needs_human_review` / `unavailable`. `overdue` = an open Activity exists but its `due_date` has passed: nobody is actioning it, so it is neither a duplicate to create nor evidence the deal is handled |
 | `next_action` | the action itself (existing, created, or merely recommended) |
 | `reasons` | plain-language justification for `action_status`, including every idempotency check performed |
 
-## Rot: two signals, never one
+## Rot: three signals, never one
 
-`rot_evidence` reports the platform's `_rot_level`/`_rot_days` *and* an
-independent recomputation, and a deal is a candidate if either flags it.
+A deal is a candidate if any of these flags it:
+
+1. the platform's `_rot_level` (anything but `fresh`/`none` - the flagged word
+   is `attention` on Suryodaya and `warning` on Keystone);
+2. days since the last **genuine contact** - the latest done, non-agent
+   Activity's `due_date` on or before today, by deal or by party on rows with
+   no `deal_id` - or `deal.updated_at`, reaching `deal_rot_days`;
+3. on a deal this agent has written to, the platform's formula with the
+   agent's rows excluded, reaching the calibrated platform boundary (the
+   laundering defence below).
+
+Signal 2 exists because the platform ages from `Activity.created_at`, the
+**insert** time. On Keystone (2026-09-28) all 177 activities share one
+`created_at`, so every deal with any activity read 11 days old and the agent,
+mirroring that formula, found 1 rotting deal where 8 were.
 
 This is not redundancy. The platform computes `_rot_days` as days since the
 most recent of `deal.updated_at` and any linked `Activity.created_at` - so an
@@ -59,6 +78,9 @@ two documented thresholds (`deal-rot-config: 14`, `CRMPreferences: 30`) are
 both wrong for it. It is measured per run by bracketing the oldest `fresh`
 deal against the youngest flagged one, over deals the agent has never written
 to; the conservative lower bound is used, and the summary states the bracket.
+It judges signal 3 only: measured on the platform's insert-time age, it says
+nothing about contact age, and on Keystone a 12-day line from it would flag
+every open deal.
 
 ## State-changing path: the idempotency rule
 
@@ -68,7 +90,9 @@ Before any `Activity.create`:
    `action_status=existing`, link it, do not create anything. If that existing
    activity is one **this agent wrote**, it is still not duplicated, but
    `reasons` says plainly that it is the agent's own unactioned note and not
-   evidence that anyone contacted the customer.
+   evidence that anyone contacted the customer. If the existing activity is
+   **past its `due_date`**, `action_status=overdue` instead: still no
+   duplicate, but it is reported as unactioned, not as handled.
 2. If `mode=propose`, stop - `action_status=recommended`, nothing written.
 3. Otherwise, **re-read** open activities for the deal immediately before the
    write (a fresh call, not the list from step 1 - the shared book means

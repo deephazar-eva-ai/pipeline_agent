@@ -68,6 +68,18 @@ def _report_result(run: TaskRun, result: Any) -> None:
             if d.action_status.value == "created" and d.next_action and "id" in d.next_action
         ]
         print(result.summary)
+        # The two seat goals, one line per row - the summary gives counts only.
+        print(f"\npipeline.rotting_deals ({len(result.deals)}):")
+        for d in result.deals:
+            ev = d.rot_evidence
+            print(f"  {d.deal_id[:8]}  {ev.get('independent_rot_days')!s:>4}d  "
+                  f"platform={ev.get('_rot_days')}/{ev.get('_rot_level')}  {d.stage:<13} "
+                  f"last_contact={ev.get('last_contact')}  action={d.action_status.value}")
+        print(f"\npipeline.uncalled_30_days ({len(result.uncalled)}):")
+        for u in result.uncalled:
+            since = "never called" if u.last_called is None else f"{u.days_since}d ({u.last_called})"
+            print(f"  {u.party_name:<34} {since:<20} open deals={len(u.open_deal_ids)} "
+                  f"value={u.open_deal_value:,.0f}")
 
     elif isinstance(result, RefusalResult):
         run.claimed_success = False

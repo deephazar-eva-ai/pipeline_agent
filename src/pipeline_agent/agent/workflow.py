@@ -22,7 +22,7 @@ from typing import Any
 
 from pipeline_agent.agent.contract import (
     ActionStatus, AgentRequest, CanonicalAnswer, ContactStatus, DealResult, ExecutionMode,
-    RefusalResult,
+    RefusalResult, UncalledParty,
 )
 from pipeline_agent.agent.refusal import build_refusal
 from pipeline_agent.mcp.client import MCPClient, PermissionDeniedError
@@ -46,6 +46,8 @@ PROVENANCE_MARKER = "created_by=pipeline_agent"
 # Observed `_rot_level` values, measured across all 133 live deals on
 # 2026-09-21: only `fresh`, `attention` and `none` occur. `none` is exactly
 # the 49 closed deals - the level is not computed for closed pipeline.
+# Keystone (2026-09-28) says `warning` where Suryodaya says `attention`, so
+# only `fresh` and `none` are ever matched by name; anything else is flagged.
 ROT_LEVEL_FRESH = "fresh"
 ROT_LEVEL_NOT_APPLICABLE = "none"
 
@@ -68,6 +70,15 @@ ROT_LEVEL_NOT_APPLICABLE = "none"
 # agent-logged task, then `fresh`/0 on 2026-09-22 while every untouched peer
 # aged 8 -> 9. Nobody contacted that customer. Logging a task is not contact,
 # and an agent that trusts `_rot_level` will quietly launder its whole book.
+#
+# Mirroring that formula (minus the agent's rows) was not enough. On Keystone
+# (2026-09-28) all 177 activities share one `created_at` - the day the book was
+# seeded - including calls dated a year earlier, so every deal with any
+# activity read 11 days old and the agent found 1 rotting deal where 8 were.
+# `created_at` says when a row was written, not when anyone spoke to the
+# customer. Rot is therefore aged from the latest *completed* contact's
+# `due_date` (never a future one, never an open task), and the platform's
+# number is kept only as evidence alongside it.
 
 # Used only when the live book offers nothing to calibrate against (see
 # `calibrate_rot_boundary`). Deliberately low: over-reporting a deal as
@@ -139,14 +150,35 @@ def is_agent_authored(activity: dict) -> bool:
 
 def independent_rot_days(deal: dict, index: ActivityIndex,
                           now: dt.datetime) -> int | None:
-    """`_rot_days` recomputed from inputs this agent has not touched.
+    """Days since anyone last genuinely touched this deal.
 
-    Same formula the platform uses (derived above), with one change: Activity
-    rows carrying the provenance marker are excluded. On an untouched deal
-    this returns exactly the platform's number; on a deal the agent has
-    written to it returns what the platform *would* have said had the agent
-    kept its hands off. That difference is the laundering.
+    The later of `deal.updated_at` and the latest completed, non-agent contact
+    with the deal - linked by `deal_id`, or by `party_id` on rows that carry
+    no `deal_id`. Contact is dated by `due_date`, not `created_at`: see the
+    Keystone note above for why an insert timestamp is not a contact date.
+
+    `last_touch_by_deal` (the platform's `created_at` input) is still read
+    when no contact date is indexed, so an index built without the contact
+    fields degrades to the old platform-mirroring behaviour instead of
+    silently reporting every deal as untouched.
     """
+    by_deal = (index.last_contact_by_deal if index.contact_dates_indexed
+               else index.last_touch_by_deal)
+    basis = max([ts for ts in (_parse_ts(deal.get("updated_at")),
+                                _parse_ts(by_deal.get(deal.get("id"))),
+                                _parse_ts(index.last_unlinked_contact_by_party.get(
+                                    deal.get("party_id"))))
+                 if ts is not None], default=None)
+    return None if basis is None else (now - basis).days
+
+
+def platform_mirror_days(deal: dict, index: ActivityIndex, now: dt.datetime) -> int | None:
+    """The platform's own `_rot_days` formula with this agent's rows removed:
+    what the platform *would* say had the agent kept its hands off.
+
+    Only meaningful against the platform's own boundary, and only on deals the
+    agent has written to - that comparison is the laundering defence. It is
+    not a contact age (see `independent_rot_days`)."""
     basis = max([ts for ts in (_parse_ts(deal.get("updated_at")),
                                 _parse_ts(index.last_touch_by_deal.get(deal.get("id"))))
                  if ts is not None], default=None)
@@ -199,7 +231,8 @@ def calibrate_rot_boundary(deals: list[dict], index: ActivityIndex, now: dt.date
             continue
         if deal.get("id") in index.agent_written_deals:
             continue  # its level is exactly what we do not trust
-        days = independent_rot_days(deal, index, now)
+        # The platform's age, not ours: this measures the platform's line.
+        days = platform_mirror_days(deal, index, now)
         if days is None:
             continue
         (fresh_days if deal.get("_rot_level") == ROT_LEVEL_FRESH
@@ -218,15 +251,27 @@ def calibrate_rot_boundary(deals: list[dict], index: ActivityIndex, now: dt.date
 
 
 def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
-                calibration: RotCalibration) -> tuple[bool, dict]:
+                calibration: RotCalibration, *,
+                threshold_days: int | None = None) -> tuple[bool, dict]:
     """Is this deal rotting, and on what evidence?
 
-    Two signals, reported side by side rather than collapsed: what the platform
-    says, and what the platform would say if this agent had never written to
-    the deal. Either one is enough to make it a candidate - which is the fix
-    for the feedback loop, because the recomputed signal does not reset when
-    the agent logs a task.
+    Three signals, reported side by side rather than collapsed; any one makes
+    the deal a candidate:
+
+    1. the platform flags it (`_rot_level` other than fresh/none);
+    2. days since the last genuine contact reach `threshold_days` - the
+       configured `deal_rot_days`. This is what catches Keystone, where the
+       platform ages from insert timestamps and calls everything fresh;
+    3. on a deal this agent has written to, the platform's own formula with
+       the agent's rows removed reaches the calibrated platform boundary. This
+       is the laundering defence: the agent's task must not be what makes a
+       deal look fresh. It is judged on the platform's line because it asks
+       what the platform itself would have said.
+
+    Callers that pass no `threshold_days` get the calibrated boundary for
+    signal 2 as well - the behaviour before contact dates were indexed.
     """
+    boundary = calibration.boundary_days if threshold_days is None else threshold_days
     evidence: dict[str, Any] = {
         "_rot_level": deal.get("_rot_level"),
         "_rot_days": deal.get("_rot_days"),
@@ -239,12 +284,20 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
 
     days = independent_rot_days(deal, index, now)
     platform_flags = deal.get("_rot_level") not in (ROT_LEVEL_FRESH, ROT_LEVEL_NOT_APPLICABLE)
-    independently_flags = days is not None and days >= calibration.boundary_days
+    independently_flags = days is not None and days >= boundary
+    agent_wrote = deal.get("id") in index.agent_written_deals
+    mirror = platform_mirror_days(deal, index, now) if agent_wrote else None
+    mirror_flags = mirror is not None and mirror >= calibration.boundary_days
 
     evidence.update({
         "independent_rot_days": days,
-        "rot_boundary_days": calibration.boundary_days,
+        "rot_boundary_days": boundary,
+        "platform_mirror_days": mirror,
+        "platform_boundary_days": calibration.boundary_days,
         "last_non_agent_touch": index.last_touch_by_deal.get(deal.get("id")),
+        "last_contact": max((d for d in (index.last_contact_by_deal.get(deal.get("id")),
+                                          index.last_unlinked_contact_by_party.get(
+                                              deal.get("party_id"))) if d), default=None),
         "platform_flags": platform_flags,
         "independently_flags": independently_flags,
     })
@@ -257,15 +310,15 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
     # deals the agent had never touched - a false accusation on its own report,
     # and the fastest way to teach a reader to ignore the one warning that
     # matters.
-    if independently_flags and not platform_flags and deal.get("id") in index.agent_written_deals:
+    if mirror_flags and not platform_flags:
         # The headline finding. Say it in the evidence, in words, on the row
         # it applies to - not only in an aggregate at the bottom of a report.
         evidence["agent_write_suppressed_platform_signal"] = True
         evidence["note"] = (
             f"the platform reads this deal as '{deal.get('_rot_level')}' only because this "
             f"agent logged an Activity against it; with the agent's own rows excluded it "
-            f"has been untouched for {days} days and nobody has contacted the customer")
-    return platform_flags or independently_flags, evidence
+            f"has been untouched for {mirror} days and nobody has contacted the customer")
+    return platform_flags or independently_flags or mirror_flags, evidence
 
 
 async def load_deals(client: MCPClient, *, page_size: int = 1000) -> list[dict]:
@@ -323,7 +376,27 @@ class ActivityIndex:
     # removed - see the derivation note at the top of this module.
     last_touch_by_deal: dict[str, str] = field(default_factory=dict)
     agent_written_deals: set[str] = field(default_factory=set)
+    # Latest `due_date` of a completed, non-agent Activity dated on or before
+    # the scan - i.e. a contact that actually happened. `by_deal` holds
+    # deal-linked rows; `unlinked_by_party` holds rows with a party but no
+    # deal, which on a book that rarely fills `deal_id` is most contact.
+    last_contact_by_deal: dict[str, str] = field(default_factory=dict)
+    last_unlinked_contact_by_party: dict[str, str] = field(default_factory=dict)
+    # Same, restricted to `type == "call"`, for `pipeline.uncalled_30_days`.
+    # Keyed by party whatever the linkage: a call logged against one deal is
+    # still a call to that customer.
+    last_call_by_party: dict[str, str] = field(default_factory=dict)
+    last_call_by_deal: dict[str, str] = field(default_factory=dict)
+    # False on an index built by hand without the contact fields; rot then
+    # falls back to `last_touch_by_deal` rather than reading "never touched".
+    contact_dates_indexed: bool = False
     scanned: int = 0
+
+    def last_called(self, party_id: str | None, deal_ids: list[str]) -> str | None:
+        """Latest completed call to this customer, via the party or any of its deals."""
+        dates = [self.last_call_by_party.get(party_id or "")]
+        dates += [self.last_call_by_deal.get(d) for d in deal_ids]
+        return max((d for d in dates if d), default=None)
 
     def last_contacted(self, deal: dict) -> tuple[str | None, str]:
         """Most recent completed contact, and which linkage proved it."""
@@ -350,7 +423,29 @@ class ActivityIndex:
         return None, "none", False
 
 
-async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> ActivityIndex:
+def _later(current: str | None, candidate: str) -> bool:
+    return candidate > (current or "")
+
+
+def _prefer_open(current: dict | None, candidate: dict, today: str) -> bool:
+    """Which open Activity represents "the next action" on a deal or party?
+
+    A still-current one beats an overdue one, and among the same kind the
+    earliest upcoming (or latest overdue) wins. First-seen, the old rule, let
+    an item forgotten in August stand in for a call booked next week - or the
+    reverse - depending on page order.
+    """
+    if current is None:
+        return True
+    cur, new = str(current.get("due_date") or ""), str(candidate.get("due_date") or "")
+    cur_live, new_live = cur >= today, new >= today
+    if cur_live != new_live:
+        return new_live
+    return new < cur if new_live else new > cur
+
+
+async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
+                               now: dt.datetime | None = None) -> ActivityIndex:
     """Scan every Activity once and index it by deal and by party.
 
     Written against the generic surface's aggregate `report(Activity, max,
@@ -361,7 +456,8 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> Ac
     `done` comes back as 0/1 rather than a JSON boolean, hence the truthiness
     check rather than an `is True` comparison.
     """
-    index = ActivityIndex()
+    index = ActivityIndex(contact_dates_indexed=True)
+    today = (now or dt.datetime.now(dt.timezone.utc)).date().isoformat()
     offset = 0
     while True:
         resp = await client.list_("Activity", limit=page_size, offset=offset)
@@ -391,11 +487,25 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000) -> Ac
                     index.last_done_by_deal[deal_id] = due
                 if party_id and due and due > index.last_done_by_party.get(party_id, ""):
                     index.last_done_by_party[party_id] = due
+                # A completed contact that has actually happened: dated, not
+                # in the future, and not the agent's own bookkeeping.
+                day = str(due)[:10] if due else ""
+                if day and day <= today and not authored_by_agent:
+                    if deal_id and _later(index.last_contact_by_deal.get(deal_id), day):
+                        index.last_contact_by_deal[deal_id] = day
+                    if party_id and not deal_id and _later(
+                            index.last_unlinked_contact_by_party.get(party_id), day):
+                        index.last_unlinked_contact_by_party[party_id] = day
+                    if activity.get("type") == "call":
+                        if party_id and _later(index.last_call_by_party.get(party_id), day):
+                            index.last_call_by_party[party_id] = day
+                        if deal_id and _later(index.last_call_by_deal.get(deal_id), day):
+                            index.last_call_by_deal[deal_id] = day
             else:
-                if deal_id:
-                    index.open_by_deal.setdefault(deal_id, activity)
-                if party_id:
-                    index.open_by_party.setdefault(party_id, activity)
+                if deal_id and _prefer_open(index.open_by_deal.get(deal_id), activity, today):
+                    index.open_by_deal[deal_id] = activity
+                if party_id and _prefer_open(index.open_by_party.get(party_id), activity, today):
+                    index.open_by_party[party_id] = activity
         index.scanned += len(records)
         offset += len(records)
         if _last_page(resp, offset, len(records), page_size):
@@ -456,6 +566,25 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
 
     existing, basis, agent_authored = index.open_activity(deal)
     if existing:
+        due = str(existing.get("due_date") or "")[:10]
+        try:
+            overdue_days = (now.date() - dt.date.fromisoformat(due)).days if due else 0
+        except ValueError:
+            overdue_days = 0  # unparseable: not provably overdue, fall through
+        if overdue_days > 0:
+            # An open task nobody finished is evidence the deal IS rotting,
+            # not that someone is on it. Reporting it as `existing` is how
+            # deal 29662773 read as handled on Keystone with its follow-up
+            # 32 days overdue. Still no duplicate: a second task beside an
+            # ignored first one helps nobody - a human has to action it.
+            who = ("this agent" if agent_authored
+                   else f"someone other than this agent (found via the {basis} link)")
+            reasons.append(
+                f"the open Activity '{existing.get('subject')}' was due {due} and is "
+                f"{overdue_days} day(s) overdue, created by {who} - nobody has actioned it. "
+                f"Not creating a duplicate; the existing one needs a human to action or "
+                f"reschedule it.")
+            return ActionStatus.OVERDUE, existing, reasons
         if agent_authored:
             # Not creating a duplicate is still right. Calling it "already
             # handled" is not: this is the agent's own unactioned note, and
@@ -519,6 +648,40 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
     return ActionStatus.CREATED, created, reasons
 
 
+def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
+                  threshold_days: int) -> list[UncalledParty]:
+    """`pipeline.uncalled_30_days`: who, among customers with open pipeline,
+    has had no completed call in `threshold_days`.
+
+    Pure, like `classify_contact`. One row per party, not per deal: the
+    question asks who, and on Keystone two customers called 14 days ago read
+    as 44-48 days uncalled per-deal because the call was logged against a
+    sibling deal. Only `type == "call"` counts - an email or a meeting is
+    contact, but it is not what was asked. Never-called parties sort first,
+    then longest silence.
+    """
+    by_party: dict[str, list[dict]] = {}
+    for deal in deals:
+        if str(deal.get("stage", "")).startswith("closed") or not deal.get("party_id"):
+            continue
+        by_party.setdefault(deal["party_id"], []).append(deal)
+
+    rows: list[UncalledParty] = []
+    for party_id, party_deals in by_party.items():
+        deal_ids = [d["id"] for d in party_deals]
+        last = index.last_called(party_id, deal_ids)
+        days = None if last is None else (now.date() - dt.date.fromisoformat(last)).days
+        if days is not None and days < threshold_days:
+            continue
+        rows.append(UncalledParty(
+            party_id=party_id,
+            party_name=str(party_deals[0].get("_party_id_display") or party_id),
+            last_called=last, days_since=days, open_deal_ids=deal_ids,
+            open_deal_value=float(sum(d.get("value") or 0 for d in party_deals))))
+    rows.sort(key=lambda r: (r.days_since is not None, -(r.days_since or 0)))
+    return rows
+
+
 async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                               run_id: str) -> CanonicalAnswer | RefusalResult:
     try:
@@ -550,22 +713,22 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     except PermissionDeniedError as e:
         return build_refusal(e, required_entities=["Deal"], tools_attempted=["list(Deal)"])
 
+    now = dt.datetime.now(dt.timezone.utc)
     try:
-        index = await load_activity_index(client)
+        index = await load_activity_index(client, now=now)
     except PermissionDeniedError as e:
         return build_refusal(e, required_entities=["Activity"],
                               tools_attempted=["list(Deal)", "list(Activity)"])
 
-    now = dt.datetime.now(dt.timezone.utc)
-
     # Selection needs the Activity index, so it happens here rather than in
-    # the Deal read: rot is recomputed with this agent's own writes excluded,
-    # and the boundary that decides "rotting" is measured off the deals the
-    # agent has never touched.
+    # the Deal read. Rot is aged from genuine contact and judged against the
+    # configured threshold; the calibrated platform boundary is reported as
+    # context only (see `assess_rot`).
     calibration = calibrate_rot_boundary(all_deals, index, now)
     assessed: list[tuple[dict, dict]] = []
     for deal in all_deals:
-        candidate, evidence = assess_rot(deal, index, now, calibration)
+        candidate, evidence = assess_rot(deal, index, now, calibration,
+                                          threshold_days=threshold)
         if candidate:
             assessed.append((deal, evidence))
 
@@ -612,10 +775,15 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         scope += " " + "; ".join(scope_notes) + "."
     laundered = sum(1 for r in results
                     if r.rot_evidence.get("agent_write_suppressed_platform_signal"))
+    uncalled = find_uncalled(all_deals, index, now, threshold)
     summary = (f"{scope} "
                f"{sum(1 for r in results if r.action_status == ActionStatus.CREATED)} next-action(s) created, "
-               f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open. "
-               f"{calibration.note()}.")
+               f"{sum(1 for r in results if r.action_status == ActionStatus.EXISTING)} already had one open, "
+               f"{sum(1 for r in results if r.action_status == ActionStatus.OVERDUE)} have an open "
+               f"action that is overdue. "
+               f"{len(uncalled)} customer(s) with open deals not called in {threshold} days "
+               f"({sum(1 for u in uncalled if u.last_called is None)} never called). "
+               f"Platform context: {calibration.note()}.")
     if laundered:
         # Loud, and in the one line a human is guaranteed to read.
         summary += (f" WARNING: {laundered} deal(s) are shown here only because rot was "
@@ -625,4 +793,4 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
 
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
-                            candidates_found=candidates_found)
+                            candidates_found=candidates_found, uncalled=uncalled)

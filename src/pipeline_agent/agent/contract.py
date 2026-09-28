@@ -26,7 +26,9 @@ class ContactStatus(str, Enum):
 
 class ActionStatus(str, Enum):
     EXISTING = "existing"                  # a suitable open Activity already exists
-    CREATED = "created"                    # this run created one (mode=create-next-actions)
+    OVERDUE = "overdue"                    # an open Activity exists but is past due - nobody is
+                                            # actioning it; not a duplicate, not "handled" either
+    CREATED = "created"                   # this run created one (mode=create-next-actions)
     RECOMMENDED = "recommended"            # a next action was determined but NOT written -
                                             # mode=propose, or a stale re-read cancelled the write
     NEEDS_HUMAN_REVIEW = "needs_human_review"  # ambiguous/invalid stage data - do not guess
@@ -70,6 +72,21 @@ class DealResult:
 
 
 @dataclass
+class UncalledParty:
+    """One row of the `pipeline.uncalled_30_days` answer: a customer with open
+    pipeline and no completed call inside the threshold. Keyed on the party,
+    not the deal, because the question asks *who* - and because calls are
+    often logged against one deal of a customer that has several."""
+
+    party_id: str
+    party_name: str
+    last_called: str | None        # due_date of the latest done `call`, None if never
+    days_since: int | None
+    open_deal_ids: list[str]
+    open_deal_value: float
+
+
+@dataclass
 class CanonicalAnswer:
     """Output contract for Track A - the full three-part task."""
 
@@ -82,6 +99,9 @@ class CanonicalAnswer:
     # len(deals) on a full run; larger when the run was capped via
     # AgentRequest.max_deals.
     candidates_found: int = 0
+    # `pipeline.uncalled_30_days`: every party with an open deal whose latest
+    # completed call is `deal_rot_days` or more ago, or who was never called.
+    uncalled: list[UncalledParty] = field(default_factory=list)
 
 
 @dataclass
