@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from pipeline_agent.agent.contract import AgentRequest, CanonicalAnswer, ExecutionMode, RefusalResult
+from pipeline_agent.agent.pipeline_checks import build_logged_contact, load_company_clock
+from pipeline_agent.agent.request_guard import check_request
 from pipeline_agent.agent.workflow import run_canonical_task
+from pipeline_agent.mcp.client import MCPToolError
 from pipeline_agent.config import Settings
 from pipeline_agent.harness.artifacts import run_artifact
 from pipeline_agent.harness.base import TaskRun
@@ -78,6 +81,52 @@ PREFLIGHT_REQUEST = ("Preflight: enumerate this credential's tool catalogue and 
                      "read access to CRMPreferences, Deal and Activity.")
 
 
+@dataclasses.dataclass
+class LoggedContact:
+    """Result of --task log-contact (item 5.1)."""
+
+    written: bool
+    payload: dict
+    record: dict | None
+    message: str
+
+
+async def log_contact(client: Any, args: argparse.Namespace, *, run_id: str) -> Any:
+    """Record a contact a person reports ("I called them yesterday").
+
+    The platform refuses a past due_date (PB1), so the row is dated today and
+    carries the real date; the Activity index reads it back, so rot and the
+    uncalled list use the real date. Writes only in create-next-actions mode."""
+    import datetime as dt
+    if len(args.deal_id) != 1 or not args.contact_date:
+        return RefusalResult("", ["Deal"], [], "log-contact needs exactly one --deal-id and "
+                                               "--contact-date YYYY-MM-DD")
+    try:
+        actual = dt.date.fromisoformat(args.contact_date)
+    except ValueError:
+        return RefusalResult("", ["Deal"], [], f"--contact-date {args.contact_date!r} is not "
+                                               f"a date (YYYY-MM-DD)")
+    notes: list[str] = []
+    now, tz_name, _ = await load_company_clock(client, os.environ.get("PIPELINE_TIMEZONE"), notes)
+    if actual > now.date():
+        return RefusalResult("", ["Activity"], [], f"{actual} is in the future ({tz_name}); "
+                                                   f"only a contact that happened can be logged")
+    try:
+        deal = await client.get("Deal", args.deal_id[0])
+    except MCPToolError as e:
+        return RefusalResult("", ["Deal"], ["get(Deal)"], f"deal not readable: {e.message}")
+    payload = build_logged_contact(deal=deal, contact_type=args.contact_type,
+                                   actual_date=actual.isoformat(), today=now.date().isoformat(),
+                                   outcome=args.outcome or "contact reported by user",
+                                   run_id=run_id)
+    if args.exec_mode != ExecutionMode.CREATE_NEXT_ACTIONS.value:
+        return LoggedContact(False, payload, None, "propose mode - not written")
+    record = await client.create("Activity", payload)
+    return LoggedContact(True, payload, record,
+                         f"logged; due_date is {payload['due_date']} because the platform "
+                         f"cannot backdate, real date {actual} recorded in the row")
+
+
 def _report_result(run: TaskRun, result: Any) -> None:
     """Fold a task's return value into the run record and say so on stdout."""
     run.final_answer = dataclasses.asdict(result)
@@ -127,6 +176,37 @@ def _report_result(run: TaskRun, result: Any) -> None:
                 print(f"    {m.deal_id[:8]} {m.value:>11,.0f}  {m.stage:<13} looks "
                       f"{m.looks_fresh_days}d old because: {m.fresh_basis_detail} "
                       f"{m.fresh_basis_date}; {contact}")
+        # keystone_enhancement_items.md: advisory sections.
+        print(f"\ndata_issues ({len(result.data_issues)}):")
+        for i in result.data_issues:
+            print(f"  {str(i.get('deal_id'))[:8]}  {i['code']:<26} {i['detail']}")
+        print(f"\nlate_orders ({len(result.late_orders)}):")
+        for o in result.late_orders:
+            print(f"  {o['order']:<16} {o['party']:<30} {o['days_late']}d late "
+                  f"(due {o['delivery_date']}, {o['delivered_status']})")
+        print(f"\nleads_needing_action ({len(result.leads_needing_action)}):")
+        for lead in result.leads_needing_action:
+            print(f"  {str(lead['lead_id'])[:8]}  {str(lead['party']):<30} {lead['status']:<10} "
+                  f"{'; '.join(lead['reasons'])}")
+        print(f"\nworklist_by_owner ({len(result.worklist_by_owner)} owner(s)):")
+        for owner, rows in result.worklist_by_owner.items():
+            print(f"  {owner}: " + "; ".join(f"{r['deal'][:30]} ({r['days_rotting']}d, "
+                                            f"{r['value']:,.0f})" for r in rows))
+        print(f"\nescalations_needed ({len(result.escalations_needed)}):")
+        for e in result.escalations_needed:
+            print(f"  {str(e.get('deal_id') or e.get('party'))[:30]}: {e['why'][:110]} -> "
+                  f"decide {e['decide']}")
+        for note in result.context_notes:
+            print(f"note: {note}")
+
+    elif isinstance(result, LoggedContact):
+        run.claimed_success = True
+        run.ended = "done"
+        if result.written and isinstance(result.record, dict) and result.record.get("id"):
+            run.created_record_ids = [result.record["id"]]
+        print(f"log-contact: {result.message}")
+        print(f"  {result.payload['type']} '{result.payload['subject']}' due_date="
+              f"{result.payload['due_date']}")
 
     elif isinstance(result, RefusalResult):
         run.claimed_success = False
@@ -170,7 +250,16 @@ async def main_async(args: argparse.Namespace) -> int:
         result: Any = None
         t0 = time.time()
         try:
-            if args.task == "loop":
+            guarded = (check_request(args.request)
+                       if args.task in ("canonical", "loop") and args.request != CANONICAL_REQUEST
+                       else None)
+            if guarded is not None:
+                # Refused before any tool call: nothing read, nothing written.
+                result = guarded
+            elif args.task == "log-contact":
+                result = await log_contact(RecordingMCPClient(client, run.steps), args,
+                                           run_id=run_id)
+            elif args.task == "loop":
                 # run_loop records its own steps and returns its own TaskRun;
                 # handing it the recorder would log every call twice.
                 run = await run_loop(task, client, llm, settings.model_name,
@@ -210,7 +299,13 @@ def main() -> int:
     parser.add_argument("--mode", choices=["dry-run", "live"], default="dry-run",
                          help="dry-run uses the in-memory stub client (no credentials needed); "
                               "live uses JSON-RPC MCP (requires AGENTSWITCH_MCP_URL/_TOKEN).")
-    parser.add_argument("--task", choices=["canonical", "preflight", "loop"], default="canonical",
+    parser.add_argument("--contact-date", default=None,
+                         help="log-contact: the date the contact actually happened (YYYY-MM-DD).")
+    parser.add_argument("--contact-type", choices=["call", "meeting", "email"], default="call",
+                         help="log-contact: what kind of contact it was.")
+    parser.add_argument("--outcome", default=None, help="log-contact: what was agreed.")
+    parser.add_argument("--task", choices=["canonical", "preflight", "loop", "log-contact"],
+                         default="canonical",
                          help="canonical runs the three-part pipeline question through the "
                               "deterministic workflow; preflight is a read-only capability probe "
                               "(tool catalogue + entity access) that re-checks Gate G1 instead of "

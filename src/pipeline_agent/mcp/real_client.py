@@ -72,6 +72,26 @@ class RealMCPClient(MCPClient):
             raise MCPToolError("tools/list", str(exc),
                                raw=getattr(exc, "data", None) or getattr(exc, "body", None)) from exc
 
+    async def call_endpoint(self, name: str, arguments: dict | None = None) -> Any:
+        """Read-only `endpoint.*` tools go on the wire under their own name.
+        Anything else is refused here, so this can never become a side door
+        around the generic surface's write tools."""
+        if not name.startswith("endpoint."):
+            raise MCPToolError(name, "call_endpoint only accepts endpoint.* tools")
+        try:
+            result = await self._transport.call_tool(name, dict(arguments or {}))
+        except (JsonRpcError, ToolResultError, TransportError) as exc:
+            if _is_permission_denied(exc):
+                raise PermissionDeniedError(name, name, "unknown",
+                                            raw=getattr(exc, "data", None)
+                                            or getattr(exc, "body", None)) from exc
+            raise MCPToolError(name, str(exc),
+                               raw=getattr(exc, "data", None) or getattr(exc, "body", None)) from exc
+        # Endpoint tools wrap their payload as {"status": "ok", "result": ...}.
+        if isinstance(result, dict) and "result" in result and "status" in result:
+            return result["result"]
+        return result
+
     async def call_tool(self, name: str, arguments: dict) -> Any:
         if name not in KNOWN_TOOLS:
             raise MCPToolError(name, "not one of this agent's configured tools",

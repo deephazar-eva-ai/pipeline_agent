@@ -77,6 +77,62 @@ Each `DealResult` carries, separately, not folded into one verdict:
 | `next_action` | the action itself (existing, created, or merely recommended) |
 | `reasons` | plain-language justification for `action_status`, including every idempotency check performed |
 
+## Advisory lists (added 2026-09-29, `agent/pipeline_checks.py`)
+
+These don't change which deals are rotting or who is uncalled. Every source
+they need is optional. Pipeline, Party, PartyRelationship, Lead, Quotation,
+SalesOrder, `endpoint.crm.account_plans` and `endpoint.people_directory` are
+read if the seat can read them; otherwise the check is skipped and
+`context_notes` says why.
+
+| Field | Contents |
+|---|---|
+| `data_issues` | One row per (deal, `code`). Codes: `contact_of_other_customer`, `contact_is_organisation`, `contact_not_found`, `stage_not_in_pipeline`, `unknown_pipeline`, `duplicate_from_lead`, `disqualified_lead`, `slipped_close_date`, `unvalued`, `no_contact`, `no_owner`, `unknown_owner`, `expired_quote`, `overdue_plan_milestone`, `close_lost_candidate` (proposed only), `won_but_prospect` (reported, never changed) |
+| `late_orders` | Confirmed SalesOrders past `delivery_date` and not delivered, for customers with open deals. Computed from SalesOrder, never from `make.orders.late` (K3) |
+| `leads_needing_action` | Qualified leads with no deal, leads whose `next_action` date has passed, and leads still `new` after `deal_rot_days`. Supplier-only parties and tagged test leads are excluded |
+| `worklist_by_owner` | Rotting deals per owner, ranked by value × days rotting, top 5 each |
+| `escalations_needed` | Who has to decide what. Written out instead of calling `escalations.raise`, because Keystone has no assignable person (G9) |
+| `weighted_pipeline` | Weighted open value from stage-default probabilities, next to the value implied by the `probability` field (Bug 11) |
+| `context_notes` | Timezone used and why, sources skipped, mismatched activity links |
+
+Behaviour changes to the core answer:
+
+- **Test data.** Open deals tagged `[teamNN-test…]`/`[teamNN-probe…]` (in the
+  title or the party name) go to `excluded_deals` with reason `test fixture`.
+  Closed tagged deals leave scope silently. Set `PIPELINE_INCLUDE_TEST_DATA=1`
+  to keep them.
+- **Mis-linked activities.** An activity whose `deal_id` belongs to a different
+  party than its own `party_id` (PB3/P2) counts as contact for neither. It is
+  counted in the summary instead.
+- **Reported contacts.** A done activity carrying
+  `logged_by=pipeline_agent actual_date=YYYY-MM-DD` is dated by `actual_date`.
+  `--task log-contact` writes such rows, because the platform refuses a past
+  `due_date` (PB1).
+- **Clock.** "Today" is the company's day: `Company.timezone`, then
+  `PIPELINE_TIMEZONE`, then UTC. Keystone's Company record has no timezone
+  field, so set `PIPELINE_TIMEZONE=America/New_York`.
+- **Next action.** A stage outside the deal's pipeline → `needs_human_review`.
+  The type follows the stage (qualification/negotiation → call, proposal →
+  email). The due date is 3 US business days out. An expired quote or an
+  overdue account-plan milestone becomes the action. The description names the
+  contact only if they represent the deal's customer. `Deal from <uuid>` titles
+  show the party name. Several overdue open tasks on one deal are reported
+  together.
+- **Before a write**, the deal itself is re-read. If it has closed or changed
+  stage since the list read, nothing is written (`recommended`, with the reason).
+
+## Requests refused before any tool call (`agent/request_guard.py`)
+
+For any request other than the canonical one, `runner` checks the text first.
+A match returns a `RefusalResult` with zero tool calls. Rules:
+- `approve_quote`: G2
+- `set_line_amount`: G1
+- `revenue_attainment`: K4
+- `invoice_payment`: Invoice is outside the catalogue
+- `delete_record`: no delete tool; the book is shared
+- `other_users_task`: not this seat's record
+- `bulk_close`: terminal and irreversible
+
 ## Rot: three signals, never one
 
 A deal is a candidate if any of these flags it:

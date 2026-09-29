@@ -131,6 +131,14 @@ class MCPClient(abc.ABC):
         """
         return None
 
+    async def call_endpoint(self, name: str, arguments: dict | None = None) -> Any:
+        """Call one read-only `endpoint.*` tool (people_directory,
+        crm.account_plans, ...), which sits outside the 13 generic tools.
+
+        Not abstract: a client that cannot reach endpoint tools says so, and
+        every caller treats the endpoint as an optional source."""
+        raise MCPToolError(name, "endpoint tools are not supported by this client")
+
     async def get_schema(self, entity: str) -> Any:
         return await self.call_tool("get_schema", {"entity": entity})
 

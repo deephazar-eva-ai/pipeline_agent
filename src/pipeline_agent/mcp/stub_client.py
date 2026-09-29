@@ -127,6 +127,12 @@ class StubMCPClient(MCPClient):
     async def list_tools(self) -> list[dict] | None:
         return [{"name": name} for name in sorted(KNOWN_TOOLS)]
 
+    async def call_endpoint(self, name: str, arguments: dict | None = None) -> Any:
+        # The stub seat has no endpoint tools, the way a narrower live seat
+        # would not: every caller must treat them as optional.
+        raise PermissionDeniedError(tool=name, entity=name, domain="unknown",
+                                     raw={"arguments": arguments})
+
     def _page(self, records: list[dict], arguments: dict) -> dict:
         offset = int(arguments.get("offset") or 0)
         limit = int(arguments.get("limit") or 20)

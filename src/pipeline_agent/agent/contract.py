@@ -151,6 +151,31 @@ class CanonicalAnswer:
     # than silently dropped, so an excluded deal is never mistaken for a
     # healthy one.
     excluded_deals: list[dict[str, Any]] = field(default_factory=list)
+    # keystone_enhancement_items.md. Every list below is advisory: nothing in
+    # them changes which deals are rotting or who is uncalled, and each row
+    # names the record, the issue code and the evidence.
+    # One row per (deal or party, issue): mis-linked contact, stage outside its
+    # pipeline, duplicate or disqualified-lead deal, slipped close date,
+    # unvalued, no contact, unknown owner, won-but-still-prospect, expired
+    # quote, overdue plan milestone, dead deal.
+    data_issues: list[dict[str, Any]] = field(default_factory=list)
+    # Qualified leads with no deal, leads whose next_action date has passed,
+    # and leads never contacted.
+    leads_needing_action: list[dict[str, Any]] = field(default_factory=list)
+    # Confirmed sales orders past delivery_date and not delivered, for
+    # customers with open pipeline (computed here: make.orders `late` is
+    # wrong, report K3).
+    late_orders: list[dict[str, Any]] = field(default_factory=list)
+    # Rotting deals ranked by value at risk (value x days rotting), top N per owner.
+    worklist_by_owner: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Cases that need a person. Written out instead of calling
+    # escalations.raise, which has no assignable person on Keystone (G9).
+    escalations_needed: list[dict[str, Any]] = field(default_factory=list)
+    # Weighted open pipeline, from per-stage default probabilities because the
+    # platform's probability field does not follow the stage (Bug 11).
+    weighted_pipeline: dict[str, Any] = field(default_factory=dict)
+    # Which optional sources were read, which were not, and why.
+    context_notes: list[str] = field(default_factory=list)
 
 
 @dataclass

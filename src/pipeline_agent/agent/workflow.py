@@ -17,6 +17,7 @@ answer - that's Track B, and it's live in this code today because Gate G1
 from __future__ import annotations
 
 import datetime as dt
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +25,8 @@ from pipeline_agent.agent.contract import (
     ActionStatus, AgentRequest, CanonicalAnswer, ContactStatus, DealResult, ExecutionMode,
     HiddenSilence, MaskedDeal, RefusalResult, UncalledParty,
 )
+from pipeline_agent.agent import pipeline_checks as checks
+from pipeline_agent.agent.pipeline_checks import actual_contact_date
 from pipeline_agent.agent.refusal import build_refusal
 from pipeline_agent.mcp.client import MCPClient, MCPToolError, PermissionDeniedError
 
@@ -453,6 +456,16 @@ class ActivityIndex:
     # falls back to `last_touch_by_deal` rather than reading "never touched".
     contact_dates_indexed: bool = False
     scanned: int = 0
+    # Activities whose deal belongs to a different customer than the
+    # activity's own party_id (PB3/P2). Neither link can be trusted, so the
+    # row counts toward neither deal nor party and is listed instead.
+    mismatched_links: list[dict] = field(default_factory=list)
+    # Every overdue open activity per deal (due dates), not just the one
+    # chosen as "the" next action - item 2.2.
+    overdue_open_by_deal: dict[str, list[str]] = field(default_factory=dict)
+    # Reported contacts logged after the fact, whose real date differs from
+    # due_date (PB1 forbids a past due_date) - item 5.1.
+    backdated_contacts: int = 0
 
     def last_called(self, party_id: str | None, deal_ids: list[str]) -> str | None:
         """Latest completed call to this customer, via the party or any of its deals."""
@@ -557,7 +570,8 @@ def _prefer_open(current: dict | None, candidate: dict, today: str) -> bool:
 
 
 async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
-                               now: dt.datetime | None = None) -> ActivityIndex:
+                               now: dt.datetime | None = None,
+                               deal_party: dict[str, str] | None = None) -> ActivityIndex:
     """Scan every Activity once and index it by deal and by party.
 
     Written against the generic surface's aggregate `report(Activity, max,
@@ -585,6 +599,23 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                 index.seen_ids.add(row_id)
             deal_id, party_id = activity.get("deal_id"), activity.get("party_id")
             due = activity.get("due_date")
+            if (deal_party is not None and deal_id and party_id and deal_id in deal_party
+                    and deal_party[deal_id] and deal_party[deal_id] != party_id):
+                # The platform accepts an activity whose deal belongs to another
+                # customer (PB3 on create, P2 on update). Counting it would
+                # freshen one customer's deal with another customer's call.
+                index.mismatched_links.append({
+                    "activity_id": row_id, "subject": activity.get("subject"),
+                    "deal_id": deal_id, "activity_party_id": party_id,
+                    "deal_party_id": deal_party[deal_id]})
+                continue
+            if activity.get("done"):
+                reported = actual_contact_date(activity)
+                if reported and reported != str(due or "")[:10]:
+                    # A contact reported after the fact: due_date is the day it
+                    # was logged, the real date is carried in the row (item 5.1).
+                    due = reported
+                    index.backdated_contacts += 1
 
             # Rot bookkeeping, kept separate from contact bookkeeping below.
             # Only deal-linked rows matter here: the platform's `_rot_days`
@@ -635,6 +666,9 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                         if deal_id and _later(index.last_call_by_deal.get(deal_id), day):
                             index.last_call_by_deal[deal_id] = day
             else:
+                open_day = _iso_day(due)
+                if deal_id and open_day and open_day < today:
+                    index.overdue_open_by_deal.setdefault(deal_id, []).append(open_day)
                 if deal_id and _prefer_open(index.open_by_deal.get(deal_id), activity, today):
                     index.open_by_deal[deal_id] = activity
                 # Party-level only when the row names no deal: an open task on a
@@ -692,7 +726,9 @@ def classify_contact(now: dt.datetime, threshold_days: int, last_contacted: str 
 
 async def determine_next_action(client: MCPClient, deal: dict, *, mode: ExecutionMode,
                                  run_id: str, now: dt.datetime,
-                                 index: ActivityIndex) -> tuple[ActionStatus, dict | None, list[str]]:
+                                 index: ActivityIndex,
+                                 ctx: checks.PipelineContext | None = None,
+                                 ) -> tuple[ActionStatus, dict | None, list[str]]:
     """The idempotency-guarded write path. Every branch that can create a
     record re-reads open activities immediately beforehand - never trusts a
     list fetched earlier in the run, per the shared-book concurrency rule
@@ -721,6 +757,12 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
                 f"{overdue_days} day(s) overdue, created by {who} - nobody has actioned it. "
                 f"Not creating a duplicate; the existing one needs a human to action or "
                 f"reschedule it.")
+            pile = index.overdue_open_by_deal.get(deal_id, [])
+            if len(pile) > 1:
+                # Item 2.2: a pile of ignored tasks is its own finding.
+                reasons.append(f"{len(pile)} open activities on this deal are overdue, the "
+                               f"oldest due {min(pile)} - close or reschedule them rather "
+                               f"than adding another")
             return ActionStatus.OVERDUE, existing, reasons
         if agent_authored:
             # Not creating a duplicate is still right. Calling it "already
@@ -749,6 +791,12 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
         reasons.append(f"stage '{stage}' is not in the validated stage-action map - "
                         f"flagging for human review rather than inventing an action")
         return ActionStatus.NEEDS_HUMAN_REVIEW, None, reasons
+    if ctx is not None and (problem := checks.stage_problem(deal, ctx)):
+        # Item 1.3 / PB2: the global state machine lets a deal into a stage
+        # its pipeline does not have. A stage-based action would be a guess.
+        reasons.append(f"{problem['detail']} - flagging for human review rather than "
+                       f"acting on a stage the pipeline does not define")
+        return ActionStatus.NEEDS_HUMAN_REVIEW, None, reasons
 
     # Shaped to Activity.create's real schema: subject/type/due_date are
     # required, and additionalProperties is false - the earlier payload's
@@ -757,13 +805,46 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
     # nowhere else for it, and it is what makes an agent-created row
     # identifiable afterwards.
     due = (now + dt.timedelta(days=NEXT_ACTION_DUE_DAYS)).date().isoformat()
+    action_type = NEXT_ACTION_TYPE
+    subject = f"Follow up: {deal.get('title') or deal_id}"
+    lines = [template]
+    if ctx is not None:
+        # Items 7.1, 7.2, 1.5, 2.5, 2.6, 1.1/7.3: the kind of action by stage,
+        # a business-day due date, a readable title, the most specific open
+        # commitment first, and a named contact only when it is really theirs.
+        action_type = checks.STAGE_ACTION_TYPE.get(stage, NEXT_ACTION_TYPE)
+        due = checks.add_business_days(now.date(), NEXT_ACTION_DUE_DAYS).isoformat()
+        subject = f"Follow up: {checks.display_title(deal)}"
+        expired = ctx.expired_quotes_by_deal.get(deal_id, [])
+        milestones = ctx.overdue_milestones_by_deal.get(deal_id, [])
+        if expired:
+            q = expired[0]
+            action_type = "call"
+            subject = f"Re-quote or extend {q.get('number')}: {checks.display_title(deal)}"
+            lines.insert(0, f"Quote {q.get('number')} is still '{q.get('status')}' but expired "
+                            f"{str(q.get('valid_till') or q.get('expiry_date'))[:10]}: agree a "
+                            f"re-quote or an extension before any other follow-up.")
+        elif milestones:
+            m = milestones[0]
+            subject = f"{m.get('title')}: {checks.display_title(deal)}"
+            lines.insert(0, f"Account-plan milestone '{m.get('title')}' ({m.get('plan')}) was "
+                            f"due {m.get('due_date')} and is not done.")
+        contact = checks.valid_contact_name(deal, ctx)
+        problem = checks.contact_problem(deal, ctx)
+        if contact:
+            lines.append(f"Contact: {contact}.")
+        elif problem:
+            lines.append(f"Do not use the contact on record: {problem['detail']}. Identify "
+                         f"the right buyer contact first.")
+        elif not deal.get("contact_id"):
+            lines.append("No buyer contact on record - identify one first.")
     proposed = {
-        "subject": f"Follow up: {deal.get('title') or deal_id}",
-        "type": NEXT_ACTION_TYPE,
+        "subject": subject,
+        "type": action_type,
         "due_date": due,
         "deal_id": deal_id,
         "priority": "medium",
-        "description": f"{template}\n\n({PROVENANCE_MARKER} run={run_id}; "
+        "description": "\n".join(lines) + f"\n\n({PROVENANCE_MARKER} run={run_id}; "
                         f"stage at time of writing: {stage})",
     }
 
@@ -774,6 +855,19 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
     # Re-read immediately before the write - a duplicate may have appeared
     # since the check above, from this run's own earlier deals or another
     # team sharing the same book.
+    if ctx is not None:
+        # Item 4.2: the deal itself may have been closed or re-staged by
+        # someone else since the list read. A task on a closed deal is noise.
+        try:
+            current = await client.get("Deal", deal_id)
+        except MCPToolError:
+            current = None
+        if isinstance(current, dict) and (
+                str(current.get("stage", "")).startswith("closed")
+                or current.get("stage") != stage):
+            reasons.append(f"the deal moved to '{current.get('stage')}' since it was read - "
+                           f"not writing a next action for a stage it is no longer in")
+            return ActionStatus.RECOMMENDED, proposed, reasons
     recheck = await client.list_("Activity", filters={"deal_id": deal_id, "done": False}, limit=1)
     if (recheck.get("records") if isinstance(recheck, dict) else None):
         reasons.append("a matching open Activity appeared between the check and the write - "
@@ -1010,12 +1104,21 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         unique_deals.append(deal)
     duplicate_deals, all_deals = len(all_deals) - len(unique_deals) - no_id, unique_deals
 
-    now = dt.datetime.now(dt.timezone.utc)
+    # The company's day, not the server's or the laptop's (item 5.2).
+    context_notes: list[str] = []
+    now, tz_name, currency_symbol = await checks.load_company_clock(
+        client, os.environ.get("PIPELINE_TIMEZONE"), context_notes)
     try:
-        index = await load_activity_index(client, now=now)
+        index = await load_activity_index(
+            client, now=now,
+            deal_party={d.get("id"): d.get("party_id") for d in all_deals})
     except PermissionDeniedError as e:
         return build_refusal(e, required_entities=["Activity"],
                               tools_attempted=["list(Deal)", "list(Activity)"])
+    # Optional sources for the advisory checks; any of them may be unreadable.
+    ctx = await checks.load_context(client, today=now.date().isoformat(), tz_name=tz_name,
+                                    currency_symbol=currency_symbol)
+    ctx.notes[:0] = context_notes
 
     # Supplier-side deals leave both answers. Calibration below still sees
     # every deal: it measures the platform's own line, which supplier deals
@@ -1029,7 +1132,28 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         excluded = [d for d in all_deals if not str(d.get("stage", "")).startswith("closed")
                     and is_supplier_only(party_roles.get(d.get("party_id")))]
         exclusion_note = ""
-    excluded_ids = {d.get("id") for d in excluded}
+    exclusion_reasons = {d.get("id"): "supplier-side: party role supplier, not customer/prospect"
+                         for d in excluded}
+    # Item 4.1: other teams' (and our own) tagged test records are rows in
+    # the shared book, not pipeline. PIPELINE_INCLUDE_TEST_DATA=1 keeps them.
+    if os.environ.get("PIPELINE_INCLUDE_TEST_DATA", "").strip() not in ("1", "true", "yes"):
+        party_names = {pid: p.get("name") for pid, p in (ctx.parties or {}).items()}
+        closed_test_ids: set = set()
+        for d in all_deals:
+            if d.get("id") in exclusion_reasons:
+                continue
+            if checks.is_test_fixture(d.get("title"), d.get("_party_id_display"),
+                                      party_names.get(d.get("party_id"))):
+                if str(d.get("stage", "")).startswith("closed"):
+                    # Out of scope, but not listed: excluded_deals holds open deals.
+                    closed_test_ids.add(d.get("id"))
+                    continue
+                excluded.append(d)
+                exclusion_reasons[d.get("id")] = ("test fixture: tagged [teamNN-test/probe] - "
+                                                  "set PIPELINE_INCLUDE_TEST_DATA=1 to include")
+    else:
+        closed_test_ids = set()
+    excluded_ids = set(exclusion_reasons) | closed_test_ids
     in_scope = [d for d in all_deals if d.get("id") not in excluded_ids]
 
     # Selection needs the Activity index, so it happens here rather than in
@@ -1052,6 +1176,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     # Taken before --limit/--deal-id narrow the list: a deal cut from a capped
     # run is still rotting, and must not be reported as hidden silence.
     rotting_ids = {deal.get("id") for deal, _ in assessed}
+    all_rotting = list(assessed)
     scope_notes: list[str] = []
 
     if request.deal_ids:
@@ -1076,7 +1201,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         contact_status, contact_evidence = classify_contact(
             now, threshold, last_contacted, basis)
         action_status, next_action, reasons = await determine_next_action(
-            client, deal, mode=request.mode, run_id=run_id, now=now, index=index)
+            client, deal, mode=request.mode, run_id=run_id, now=now, index=index, ctx=ctx)
         results.append(DealResult(
             deal_id=deal["id"], stage=deal.get("stage", ""),
             rot_evidence=rot_evidence,
@@ -1108,9 +1233,13 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                   f"{threshold} days - see never_called_new" if never_called_new else "")
                + ". "
                f"Platform context: {calibration.note()}.")
-    if excluded:
-        summary += (f" {len(excluded)} open supplier-side deal(s) excluded from both answers "
-                    f"(party role supplier, not customer/prospect) - see excluded_deals.")
+    n_test = sum(1 for r in exclusion_reasons.values() if r.startswith("test fixture"))
+    if excluded and len(excluded) > n_test:
+        summary += (f" {len(excluded) - n_test} open supplier-side deal(s) excluded from both "
+                    f"answers (party role supplier, not customer/prospect) - see excluded_deals.")
+    if n_test:
+        summary += (f" {n_test} open test-fixture deal(s) ([teamNN-test/probe] tags) excluded "
+                    f"- see excluded_deals.")
     if exclusion_note:
         summary += f" {exclusion_note}"
     no_party = [d for d in in_scope if not d.get("party_id")
@@ -1147,6 +1276,43 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                     f"platform reports them as fresh because the agent wrote to them, "
                     f"not because anyone contacted the customer.")
 
+    # keystone_enhancement_items.md: the advisory lists. None of them changes
+    # the rotting or uncalled answers above.
+    rot_age = {d.get("id"): _rot_age(d, index, now)[0] for d in in_scope
+               if not str(d.get("stage", "")).startswith("closed")}
+    has_open = {d.get("id") for d in in_scope if index.open_activity(d)[0]}
+    data_issues = checks.collect_data_issues(in_scope, ctx, rot_age=rot_age,
+                                             has_open_action=has_open)
+    late_orders = checks.find_late_orders(in_scope, ctx)
+    leads = checks.find_leads_needing_action(all_deals, ctx, threshold)
+    weighted = checks.weighted_pipeline(in_scope, ctx)
+    worklist = checks.worklist_by_owner(all_rotting)
+    escalations = checks.escalations_needed(results, data_issues, late_orders)
+
+    counts: dict[str, int] = {}
+    for issue in data_issues:
+        counts[issue["code"]] = counts.get(issue["code"], 0) + 1
+    if counts:
+        summary += (" DATA ISSUES: " + ", ".join(f"{v} {k.replace('_', ' ')}"
+                                                 for k, v in sorted(counts.items()))
+                    + " - see data_issues.")
+    if index.mismatched_links:
+        summary += (f" {len(index.mismatched_links)} activit(ies) link a deal of one customer "
+                    f"to another customer and were not counted as contact.")
+    if index.backdated_contacts:
+        summary += (f" {index.backdated_contacts} reported contact(s) were dated from their "
+                    f"recorded actual_date, not their log date.")
+    if late_orders:
+        summary += (f" {len(late_orders)} confirmed order(s) are past delivery for customers "
+                    f"with open deals - see late_orders.")
+    if leads:
+        summary += f" {len(leads)} lead(s) need action - see leads_needing_action."
+    summary += (f" Weighted open pipeline {ctx.money(weighted['weighted_by_stage_default'])} "
+                f"of {ctx.money(weighted['open_value'])} (stage defaults; the probability "
+                f"field gives {ctx.money(weighted['weighted_by_probability_field'])}).")
+    if escalations:
+        summary += f" {len(escalations)} item(s) need a person - see escalations_needed."
+
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
                             candidates_found=candidates_found, uncalled=uncalled,
@@ -1155,5 +1321,9 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                                 "deal_id": d.get("id"), "title": d.get("title"),
                                 "party": d.get("_party_id_display") or d.get("party_id"),
                                 "value": d.get("value"),
-                                "reason": "supplier-side: party role supplier, "
-                                          "not customer/prospect"} for d in excluded])
+                                "reason": exclusion_reasons[d.get("id")]} for d in excluded],
+                            data_issues=data_issues, leads_needing_action=leads,
+                            late_orders=late_orders, worklist_by_owner=worklist,
+                            escalations_needed=escalations, weighted_pipeline=weighted,
+                            context_notes=ctx.notes + [
+                                f"{len(index.mismatched_links)} mismatched activity link(s)"])

@@ -33,6 +33,18 @@ class RecordingMCPClient(MCPClient):
         self._steps.append(Step("tool_call", "tools/list", "", True, detail))
         return tools
 
+    async def call_endpoint(self, name: str, arguments: dict | None = None) -> Any:
+        try:
+            result = await self._inner.call_endpoint(name, arguments)
+        except PermissionDeniedError as e:
+            self._steps.append(Step("refused", name, "", False, str(e), arguments=arguments or {}))
+            raise
+        except MCPToolError as e:
+            self._steps.append(Step("error", name, "", False, str(e), arguments=arguments or {}))
+            raise
+        self._steps.append(Step("tool_call", name, "", True, arguments=arguments or {}))
+        return result
+
     async def call_tool(self, name: str, arguments: dict) -> Any:
         entity = arguments.get("entity", "")
         try:
