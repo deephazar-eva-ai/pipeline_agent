@@ -165,6 +165,8 @@ class PipelineContext:
     tz_name: str = "UTC"
     currency_symbol: str = ""
     pipelines: dict[str, set[str]] | None = None
+    # The same stages in pipeline order, for stage regression (snapshot.py).
+    pipeline_stage_order: dict[str, list[str]] = field(default_factory=dict)
     parties: dict[str, dict] | None = None
     person_orgs: dict[str, set[str]] | None = None
     leads: dict[str, dict] | None = None
@@ -258,11 +260,13 @@ async def load_context(client: MCPClient, *, today: str, tz_name: str = "UTC",
     if pipelines is not None:
         ctx.pipelines = {}
         for p in pipelines:
-            stages = {str(s.get("key") or s.get("name")) for s in (p.get("stages") or [])
-                      if isinstance(s, dict)}
+            ordered = [str(s.get("key") or s.get("name")) for s in (p.get("stages") or [])
+                       if isinstance(s, dict)]
+            stages = set(ordered)
             for key in (p.get("key"), p.get("name"), p.get("id")):
                 if key:
                     ctx.pipelines[str(key)] = stages
+                    ctx.pipeline_stage_order[str(key)] = ordered
 
     parties = await _read_all(client, "Party", n)
     if parties is not None:
@@ -471,13 +475,37 @@ def find_late_orders(deals: list[dict], ctx: PipelineContext) -> list[dict]:
     return rows
 
 
+# Lead priority (crm_gap_fillup.md B4). The platform has a lead-scoring switch
+# (`CRMPreferences.lead_scoring_enabled`) and nothing behind it. This is not a
+# win-probability model: it ranks which lead needs a person first, from four
+# inputs every row shows. Template weights - confirm with the seat owner.
+LEAD_STATUS_POINTS = {"qualified": 40, "contacted": 25, "working": 25, "new": 15}
+LEAD_SILENCE_POINTS = 30
+LEAD_VALUE_POINTS = 20
+LEAD_OVERDUE_POINTS = 10
+OPEN_LEAD_STATUSES = frozenset({"new", "contacted", "working", "qualified"})
+
+
+def _lead_p90(leads: list[dict]) -> float:
+    values = sorted(v for v in (_money(lead.get("value")) for lead in leads) if v > 0)
+    return values[max(0, -(-9 * len(values) // 10) - 1)] if values else 0.0
+
+
 def find_leads_needing_action(deals: list[dict], ctx: PipelineContext,
-                              threshold_days: int) -> list[dict]:
-    """Item 2.7: qualified with no deal, next action overdue, never contacted."""
+                              threshold_days: int, index: Any = None) -> list[dict]:
+    """Item 2.7: qualified with no deal, next action overdue, never contacted.
+
+    With the Activity `index` (B4) it also answers `pipeline.uncalled_30_days`
+    for leads: an open lead whose party has no completed call inside the
+    threshold is listed, with "called" (type == call) and "touched" (any
+    completed contact) reported separately, and every row carries a
+    `priority` score with its inputs. Without the index nothing about calls
+    is claimed."""
     if ctx.leads is None:
         return []
     today = dt.date.fromisoformat(ctx.today)
     with_deal = {d.get("lead_id") for d in deals if d.get("lead_id")}
+    value_p90 = _lead_p90(list(ctx.leads.values()))
     rows = []
     for lead in ctx.leads.values():
         if is_test_fixture(lead.get("notes")):
@@ -503,11 +531,38 @@ def find_leads_needing_action(deals: list[dict], ctx: PipelineContext,
                 threshold_days:
             reasons.append(f"still 'new' {(today - dt.date.fromisoformat(created)).days} days "
                            f"after it came in - never contacted")
+        calls: dict[str, Any] = {}
+        if index is not None and status in OPEN_LEAD_STATUSES and lead.get("party_id"):
+            pid = lead["party_id"]
+            called = index.last_call_by_party.get(pid)
+            touched = index.last_unlinked_contact_by_party.get(pid)
+            days = None if called is None else (today - dt.date.fromisoformat(called)).days
+            calls = {"last_called": called, "days_since_call": days, "last_touched": touched,
+                     "last_touch_type": index.last_unlinked_contact_type_by_party.get(pid)}
+            if called is None:
+                reasons.append("never called" + (f" (last touched {touched} by "
+                                                 f"{calls['last_touch_type']})" if touched
+                                                 else ""))
+            elif days >= threshold_days:
+                reasons.append(f"not called in {days} days (threshold {threshold_days})")
         if reasons:
+            value = _money(lead.get("value"))
+            silence = (None if not calls else 1.0 if calls["last_called"] is None
+                       else min(calls["days_since_call"] / threshold_days, 1.0))
+            points = {
+                "status": LEAD_STATUS_POINTS.get(str(status), 0),
+                "silence": 0 if silence is None else round(LEAD_SILENCE_POINTS * silence, 1),
+                "value": (round(LEAD_VALUE_POINTS * min(value / value_p90, 1.0), 1)
+                          if value_p90 else 0),
+                "overdue_next_action": LEAD_OVERDUE_POINTS if nxt and nxt < ctx.today else 0,
+            }
             rows.append({"lead_id": lead.get("id"), "party": party, "status": status,
-                         "value": _money(lead.get("value")), "source": lead.get("source"),
-                         "reasons": reasons})
-    rows.sort(key=lambda r: -r["value"])
+                         "value": value, "source": lead.get("source"),
+                         "reasons": reasons, **calls,
+                         "priority": round(sum(points.values()), 1),
+                         "priority_inputs": {**points, "silence_known": silence is not None,
+                                             "value_p90": value_p90}})
+    rows.sort(key=lambda r: (-r["priority"], -r["value"]))
     return rows
 
 
@@ -572,3 +627,164 @@ def escalations_needed(results: list, issues: list[dict], late_orders: list[dict
                                                 f"while the customer has open deals",
                     "decide": "who tells the customer, before the next sales touch"})
     return out
+
+
+# --- owner rollup and forecast (crm_gap_fillup.md B5) ----------------------
+
+CALL_WINDOW_DAYS = 30
+
+
+def owner_rollup(deals: list[dict], rotting_ids: set, index: Any,
+                 ctx: PipelineContext) -> dict[str, dict]:
+    """Per owner: open, rotting and won value, and calls to the owner's
+    customers in the last 30 days.
+
+    Calls are counted per customer, not per rep: Activity carries no reliable
+    rep field (owner is free text, P4), so "calls to this owner's customers"
+    is what the data can support, and the row says so. Unowned and
+    unrecognised owners are their own buckets."""
+    today = dt.date.fromisoformat(ctx.today)
+    known = ctx.known_people
+    out: dict[str, dict] = {}
+    for d in deals:
+        raw = str(d.get("owner") or "").strip()
+        if not raw:
+            owner = "(no owner)"
+        elif known is not None and raw.lower() not in known:
+            owner = f"(unrecognised) {raw}"
+        else:
+            owner = raw
+        row = out.setdefault(owner, {"open_deals": 0, "open_value": 0.0, "rotting_deals": 0,
+                                     "rotting_value": 0.0, "won_value": 0.0,
+                                     "customers": set()})
+        value = _money(d.get("value"))
+        if d.get("stage") == "closed_won":
+            row["won_value"] += value
+        elif _is_open(d):
+            row["open_deals"] += 1
+            row["open_value"] += value
+            if d.get("party_id"):
+                row["customers"].add(d["party_id"])
+            if d.get("id") in rotting_ids:
+                row["rotting_deals"] += 1
+                row["rotting_value"] += value
+    for row in out.values():
+        customers = row.pop("customers")
+        recent = [p for p in customers if index is not None
+                  and (last := index.last_call_by_party.get(p))
+                  and (today - dt.date.fromisoformat(last)).days <= CALL_WINDOW_DAYS]
+        row["customers"] = len(customers)
+        row["customers_called_last_30d"] = len(recent)
+        for key in ("open_value", "rotting_value", "won_value"):
+            row[key] = round(row[key], 2)
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["rotting_value"]))
+
+
+def _field_probability(deal: dict) -> tuple[float | None, str]:
+    """(probability %, basis) the way this agent reads it: won 100, lost 0,
+    an open deal's own field when > 0, else unset."""
+    stage = str(deal.get("stage") or "")
+    if stage == "closed_won":
+        return 100.0, "won"
+    if stage == "closed_lost":
+        return 0.0, "lost"
+    p = _money(deal.get("probability"))
+    return (p, "field") if p > 0 else (None, "unset")
+
+
+async def reconcile_forecast(client: MCPClient, deals: list[dict],
+                             ctx: PipelineContext) -> dict:
+    """Put the platform's `/api/forecast` next to our own reading and list
+    every deal where they disagree, with the reason.
+
+    REST only: the forecast is not in the MCP catalogue (P4). If it cannot
+    be read the section says so and nothing else changes."""
+    try:
+        forecast = await client.get_rest("/api/forecast")
+    except PermissionDeniedError as e:
+        return {"available": False, "reason": f"forecast refused: {e.message}"}
+    except (MCPToolError, NotImplementedError) as e:
+        return {"available": False, "reason": f"forecast not readable: {e}"}
+    buckets = (forecast or {}).get("buckets") if isinstance(forecast, dict) else None
+    if not isinstance(buckets, list):
+        return {"available": False, "reason": "forecast reply has no buckets"}
+
+    by_id = {d.get("id"): d for d in deals}
+    month = ctx.today[:7]
+    disagreements, past_dated, not_open = [], [], []
+    seen: set = set()
+    platform_total = ours_total = 0.0
+    for bucket in buckets:
+        period = str(bucket.get("period") or "")
+        if period and period < month:
+            past_dated.append({"period": period, "deals": bucket.get("deal_count"),
+                               "value": bucket.get("total_value")})
+        for row in bucket.get("deals") or []:
+            deal_id = row.get("id")
+            seen.add(deal_id)
+            value = _money(row.get("value"))
+            weighted = _money(row.get("weighted"))
+            platform_total += weighted
+            deal = by_id.get(deal_id)
+            if deal is None:
+                not_open.append({"deal_id": deal_id, "title": row.get("title"),
+                                 "reason": "in the forecast but not an in-scope deal "
+                                           "(excluded, test data or unknown)"})
+                continue
+            if not _is_open(deal):
+                not_open.append({"deal_id": deal_id, "title": row.get("title"),
+                                 "reason": f"in the forecast but {deal.get('stage')}"})
+            prob, basis = _field_probability(deal)
+            stage_default = STAGE_DEFAULT_PROBABILITY.get(str(deal.get("stage") or ""))
+            ours = value * (prob if prob is not None else (stage_default or 0)) / 100
+            ours_total += ours
+            implied = round(100 * weighted / value, 1) if value else None
+            reasons = []
+            if basis == "unset" and implied:
+                reasons.append(f"probability is 0 on the record, but the forecast weights it at "
+                               f"{implied}%")
+            elif prob is not None and implied is not None and abs(implied - prob) > 0.5:
+                reasons.append(f"forecast weights at {implied}%, the record says {prob:g}%")
+            if period and period < month and _is_open(deal):
+                reasons.append(f"sits in past period {period} - the close date has slipped")
+            if reasons:
+                disagreements.append({"deal_id": deal_id, "title": display_title(deal),
+                                      "period": period, "value": value,
+                                      "platform_weighted": weighted,
+                                      "our_weighted": round(ours, 2),
+                                      "our_basis": basis if prob is not None
+                                      else f"unset - stage default {stage_default}%",
+                                      "reasons": reasons})
+    open_missing = [d.get("id") for d in deals if _is_open(d) and d.get("id") not in seen]
+    disagreements.sort(key=lambda r: -abs(r["platform_weighted"] - r["our_weighted"]))
+    return {"available": True,
+            "platform_weighted_total": round(platform_total, 2),
+            "our_weighted_total_same_deals": round(ours_total, 2),
+            "disagreements": disagreements,
+            "past_dated_buckets": past_dated,
+            "forecast_deals_not_open": not_open,
+            "open_deals_not_in_forecast": len(open_missing),
+            "basis": "ours: won 100%, lost 0%, the record's probability when > 0, else the "
+                     "stage default (labelled 'unset')"}
+
+
+# --- call-outcome tags (crm_gap_fillup.md B10) -----------------------------
+
+# Keyword cues, not a model. Advisory only: they are shown with the logged
+# call and never written to the book as a sentiment field.
+OUTCOME_CUES = {
+    "objection:price": ("price", "expensive", "costly", "discount", "budget", "cheaper"),
+    "objection:timing": ("next quarter", "not now", "later", "delay", "postpone", "hold"),
+    "objection:competitor": ("competitor", "other supplier", "another vendor", "quote from"),
+    "objection:authority": ("need approval", "check with", "boss", "management", "committee"),
+    "signal:positive": ("agreed", "confirmed", "interested", "go ahead", "order", "approved"),
+    "signal:negative": ("not interested", "cancel", "lost", "declined", "no longer"),
+}
+
+
+def tag_call_outcome(text: str) -> dict:
+    """Keyword-inferred tags for a call outcome a person dictated."""
+    low = (text or "").lower()
+    tags = sorted(tag for tag, cues in OUTCOME_CUES.items() if any(c in low for c in cues))
+    return {"tags": tags, "basis": "keyword-inferred from the outcome text; advisory, "
+                                   "not written to the book"}

@@ -34,6 +34,12 @@ from pipeline_agent.mcp.client import KNOWN_TOOLS, MCPClient, MCPToolError, Perm
 # live platform refuses Invoice / SalarySlip / Contract.
 SEAT_ENTITIES = frozenset({"CRMPreferences", "Deal", "Activity"})
 
+# Agent-workspace entities the digest and the rationale Note write to
+# (crm_gap_fillup.md B6/B7). An in-memory store, so a dry-run exercises the
+# dedupe-then-write path; `search` matches as a plain substring.
+AGENT_ENTITIES = frozenset({"AgentMemory", "AgentTodo", "AgentEscalation", "AgentSession",
+                            "AgentTask", "Note"})
+
 _PARTY_CONTACTED = "stub-party-contacted"
 _PARTY_SILENT = "stub-party-silent"
 
@@ -138,9 +144,26 @@ class StubMCPClient(MCPClient):
         limit = int(arguments.get("limit") or 20)
         return {"records": records[offset:offset + limit], "total": len(records)}
 
+    def _agent_store(self, name: str, entity: str, arguments: dict) -> Any:
+        rows = [c["record"] for c in self._created if c["entity"] == entity]
+        if name == "list":
+            needle = arguments.get("search")
+            if needle:
+                rows = [r for r in rows if needle in str(r)]
+            return self._page(rows, arguments)
+        if name == "get":
+            match = next((r for r in rows if r["id"] == arguments.get("id")), None)
+            if match is None:
+                raise MCPToolError("get", f"no {entity} record {arguments.get('id')!r}",
+                                   entity=entity)
+            return match
+        return None
+
     async def call_tool(self, name: str, arguments: dict) -> Any:
         entity = arguments.get("entity")
-        if entity and entity not in SEAT_ENTITIES:
+        if entity in AGENT_ENTITIES and name in ("list", "get"):
+            return self._agent_store(name, entity, arguments)
+        if entity and entity not in SEAT_ENTITIES | AGENT_ENTITIES:
             raise PermissionDeniedError(tool=name, entity=entity, domain="unknown",
                                          raw={"arguments": arguments})
 

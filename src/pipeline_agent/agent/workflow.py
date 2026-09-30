@@ -26,9 +26,12 @@ from pipeline_agent.agent.contract import (
     HiddenSilence, MaskedDeal, RefusalResult, UncalledParty,
 )
 from pipeline_agent.agent import pipeline_checks as checks
+from pipeline_agent.agent import rot_score as rs
+from pipeline_agent.agent import snapshot as snap
 from pipeline_agent.agent.pipeline_checks import actual_contact_date
 from pipeline_agent.agent.refusal import build_refusal
 from pipeline_agent.mcp.client import MCPClient, MCPToolError, PermissionDeniedError
+from pipeline_agent.mcp.tool_names import ENTITY_SCOPED, GENERIC
 
 DEFAULT_ROT_DAYS = 30  # schema default; overridden by the live CRMPreferences value when readable
 
@@ -82,6 +85,65 @@ ROT_LEVEL_NOT_APPLICABLE = "none"
 # customer. Rot is therefore aged from the latest *completed* contact's
 # `due_date` (never a future one, never an open task), and the platform's
 # number is kept only as evidence alongside it.
+
+# The tools this workflow calls, per surface (crm_gap_fillup.md B1). A run
+# whose catalogue has lost one stops before the first read and names it,
+# rather than failing half-way or silently skipping a step.
+WORKFLOW_TOOLS = {
+    GENERIC: {"read": ("list",), "write": ("get", "create")},
+    ENTITY_SCOPED: {"read": ("Deal.list", "Activity.list"),
+                    "write": ("Deal.get", "Activity.create")},
+}
+
+# B6: with PIPELINE_RATIONALE_NOTES=1, a write keeps the Activity to the action
+# itself and puts the "why" in a Note on the deal. Off by default: nobody has
+# yet confirmed that a new Note leaves `_rot_days` alone, and the platform's
+# rot formula has changed once already.
+RATIONALE_NOTES_ENV = "PIPELINE_RATIONALE_NOTES"
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+async def missing_workflow_tools(client: MCPClient, mode: ExecutionMode) -> list[str] | None:
+    """Tools this run needs that the catalogue no longer serves, or None
+    when the client cannot enumerate a catalogue (fakes, the stub's peers)."""
+    try:
+        tools = await client.list_tools()
+    except MCPToolError:
+        return None
+    if tools is None:
+        return None
+    names = {t.get("name", "") for t in tools if isinstance(t, dict)}
+    surface = (GENERIC if names & {"list", "create"}
+               else ENTITY_SCOPED if names and all("." in n for n in names) else None)
+    if surface is None:
+        return None
+    need = WORKFLOW_TOOLS[surface]["read"]
+    if mode is ExecutionMode.CREATE_NEXT_ACTIONS:
+        need += WORKFLOW_TOOLS[surface]["write"]
+    return [t for t in need if t not in names]
+
+
+def platform_formula_check(deals: list[dict], index: "ActivityIndex",
+                           now: dt.datetime) -> tuple[int, int]:
+    """(matching, compared): open deals the agent never wrote to whose
+    `_rot_days` equals the recorded platform formula. A drop below `compared`
+    means the platform changed how it ages deals again (B1)."""
+    compared = matching = 0
+    for deal in deals:
+        if str(deal.get("stage", "")).startswith("closed") or \
+                deal.get("id") in index.agent_written_deals or \
+                not isinstance(deal.get("_rot_days"), int):
+            continue
+        mirror = platform_mirror_days(deal, index, now)
+        if mirror is None:
+            continue
+        compared += 1
+        matching += mirror == deal["_rot_days"]
+    return matching, compared
+
 
 # Used only when the live book offers nothing to calibrate against (see
 # `calibrate_rot_boundary`). Deliberately low: over-reporting a deal as
@@ -728,6 +790,7 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
                                  run_id: str, now: dt.datetime,
                                  index: ActivityIndex,
                                  ctx: checks.PipelineContext | None = None,
+                                 rationale: str = "",
                                  ) -> tuple[ActionStatus, dict | None, list[str]]:
     """The idempotency-guarded write path. Every branch that can create a
     record re-reads open activities immediately beforehand - never trusts a
@@ -874,8 +937,28 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
                         "not creating a duplicate")
         return ActionStatus.EXISTING, recheck["records"][0], reasons
 
+    use_note = _flag(RATIONALE_NOTES_ENV)
+    if use_note:
+        # B6: the Activity says what to do; the Note says why. The marker
+        # stays on the Activity - it is what `is_agent_authored` reads.
+        proposed["description"] = (f"{lines[0]}\n\n({PROVENANCE_MARKER} run={run_id}; "
+                                   f"stage at time of writing: {stage}; rationale in a Note "
+                                   f"on this deal)")
     created = await client.create("Activity", proposed)
     reasons.append("created after a fresh re-read found no existing open action")
+    if use_note:
+        note = {"title": f"Why: {subject}"[:200], "deal_id": deal_id,
+                "content": "\n".join(lines + ([rationale] if rationale else []))
+                + f"\n\n({PROVENANCE_MARKER} run={run_id}; Activity "
+                  f"{(created or {}).get('id')})"}
+        if deal.get("party_id"):
+            note["party_id"] = deal["party_id"]
+        try:
+            written = await client.create("Note", note)
+            created = {**(created or {}), "rationale_note": {"id": (written or {}).get("id")}}
+            reasons.append("rationale written to a Note on the deal")
+        except MCPToolError as e:
+            reasons.append(f"rationale Note not written ({e.message}); the Activity stands")
     return ActionStatus.CREATED, created, reasons
 
 
@@ -1058,7 +1141,20 @@ def find_hidden_silence(deals: list[dict], index: ActivityIndex, now: dt.datetim
 
 
 async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
-                              run_id: str) -> CanonicalAnswer | RefusalResult:
+                              run_id: str,
+                              history: snap.SnapshotHistory | None = None,
+                              snapshot_sink: list | None = None,
+                              ) -> CanonicalAnswer | RefusalResult:
+    """`history` is this tenant's earlier snapshots (B2); rows for this run's
+    own snapshot are appended to `snapshot_sink` for the caller to persist."""
+    missing = await missing_workflow_tools(client, request.mode)
+    if missing:
+        return RefusalResult(
+            missing_domain="", missing_entities=sorted({t.split(".")[0] for t in missing}),
+            tools_attempted=["tools/list"],
+            message=(f"this seat's catalogue no longer serves {', '.join(missing)}, which this "
+                     f"run needs - stopping before any read. Re-run --task preflight to see "
+                     f"what changed."))
     try:
         threshold, used_live = await load_rot_threshold(client)
         threshold_note = ("" if used_live else
@@ -1195,13 +1291,52 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     elif request.max_deals is not None:
         assessed = assessed[:request.max_deals]
 
+    # B2/B3: history-derived signals and the five-factor score, for every
+    # open in-scope deal (not only the rotting ones - the score may point at
+    # deals the rot check did not flag).
+    open_scope = [d for d in in_scope if not str(d.get("stage", "")).startswith("closed")]
+    value_p90 = rs.p90([_money(d.get("value")) for d in open_scope])
+    derived_by_id: dict[str, dict] = {}
+    scores: dict[str, dict] = {}
+    for deal in open_scope:
+        order = (ctx.pipeline_stage_order.get(str(deal.get("pipeline") or ""))
+                 or snap.DEFAULT_STAGE_ORDER)
+        derived = snap.derive(deal, history, now, [s for s in order
+                                                   if not s.startswith("closed")])
+        derived_by_id[deal["id"]] = derived
+        age, age_basis = _rot_age(deal, index, now)
+        opened = _parse_ts(deal.get("created_at"))
+        scores[deal["id"]] = rs.score_deal(
+            deal, now=now,
+            contact_days=age if age_basis in ("contact", "legacy") else None,
+            opened_days=None if opened is None else max(0, (now - opened).days),
+            stage_days_typical=threshold, value=_money(deal.get("value")),
+            value_p90=value_p90, derived=derived, money=ctx.money)
+
     results: list[DealResult] = []
     for deal, rot_evidence in assessed:
         last_contacted, basis = index.last_contacted(deal)
         contact_status, contact_evidence = classify_contact(
             now, threshold, last_contacted, basis)
+        score = scores.get(deal["id"]) or {}
         action_status, next_action, reasons = await determine_next_action(
-            client, deal, mode=request.mode, run_id=run_id, now=now, index=index, ctx=ctx)
+            client, deal, mode=request.mode, run_id=run_id, now=now, index=index, ctx=ctx,
+            rationale=(f"Rot evidence: {rot_evidence.get('independent_rot_days')} days since "
+                       f"genuine contact (basis {rot_evidence.get('age_basis')}); "
+                       f"{score.get('rot_comment') or 'no rot score'}"))
+        # The two signals answer different questions: the rot check asks "has
+        # anyone spoken to this customer", the score weighs five factors with
+        # inactivity at only 0.25 - so a deal silent for a year can still
+        # score `healthy`. Say so on the row rather than let them contradict.
+        score = dict(score)
+        if score.get("rot_band") in (rs.BAND_HEALTHY,):
+            score["agrees_with_rot_check"] = False
+            score["rot_comment"] += (" The rot check still flags this deal: the score "
+                                     "weights inactivity at 0.25, so silence alone cannot "
+                                     "make it at-risk.")
+        elif score.get("rot_band") in (rs.BAND_AT_RISK, rs.BAND_CRITICAL):
+            score["agrees_with_rot_check"] = True
+        rot_evidence["rot_score"] = score
         results.append(DealResult(
             deal_id=deal["id"], stage=deal.get("stage", ""),
             rot_evidence=rot_evidence,
@@ -1284,7 +1419,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     data_issues = checks.collect_data_issues(in_scope, ctx, rot_age=rot_age,
                                              has_open_action=has_open)
     late_orders = checks.find_late_orders(in_scope, ctx)
-    leads = checks.find_leads_needing_action(all_deals, ctx, threshold)
+    leads = checks.find_leads_needing_action(all_deals, ctx, threshold, index=index)
     weighted = checks.weighted_pipeline(in_scope, ctx)
     worklist = checks.worklist_by_owner(all_rotting)
     escalations = checks.escalations_needed(results, data_issues, late_orders)
@@ -1313,6 +1448,58 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     if escalations:
         summary += f" {len(escalations)} item(s) need a person - see escalations_needed."
 
+    # B3: band counts over every open in-scope deal, and what the score sees
+    # that the rot check does not. Additive only.
+    band_counts = {b: 0 for b in rs.BANDS}
+    for sc in scores.values():
+        band_counts[sc["rot_band"]] += 1
+    not_flagged = sorted(
+        ({"deal_id": i, "title": checks.display_title(next(d for d in open_scope
+                                                             if d["id"] == i)),
+          "rot_band": sc["rot_band"], "rot_score": sc["rot_score"],
+          "rot_comment": sc["rot_comment"]}
+         for i, sc in scores.items()
+         if sc["rot_band"] in (rs.BAND_CRITICAL, rs.BAND_AT_RISK) and i not in rotting_ids),
+        key=lambda r: -(r["rot_score"] or 0))
+    rot_scores = {"bands": band_counts, "scored_but_not_flagged": not_flagged,
+                  "model": "gapreport §5.1; stage is a proxy until a snapshot sees a change",
+                  "value_p90": value_p90,
+                  "history_snapshots": len(history.snapshots) if history else 0}
+    if scores:
+        summary += (" ROT SCORE: " + ", ".join(f"{n} {b.replace('_', ' ')}"
+                                               for b, n in band_counts.items() if n)
+                    + (f"; {len(not_flagged)} at-risk/critical deal(s) the rot check did not "
+                       f"flag" if not_flagged else "") + " - see rot_scores.")
+
+    # B2: this run's snapshot and what changed since the last one.
+    captured_at = now.isoformat()
+    rows = snap.build_rows(in_scope, captured_at=captured_at, run_id=run_id, scores=scores)
+    if snapshot_sink is not None:
+        snapshot_sink.extend(rows)
+    snapshot_changes = snap.diff(history.latest if history else None, rows)
+    snapshot_changes["history_snapshots"] = len(history.snapshots) if history else 0
+    snapshot_changes["regressions"] = [
+        {"deal_id": i, **r} for i, dv in derived_by_id.items() for r in dv["regressions"]]
+    snapshot_changes["close_date_pushes"] = [
+        {"deal_id": i, **p} for i, dv in derived_by_id.items() for p in dv["close_date_pushes"]]
+    snapshot_changes["stage_entry_observed"] = sum(
+        1 for dv in derived_by_id.values() if dv["stage_entry"]["basis"] == "observed")
+    if snapshot_changes["regressions"] or snapshot_changes["close_date_pushes"]:
+        summary += (f" HISTORY: {len(snapshot_changes['regressions'])} stage regression(s), "
+                    f"{len(snapshot_changes['close_date_pushes'])} close-date push(es) across "
+                    f"{snapshot_changes['history_snapshots']} earlier snapshot(s) - see "
+                    f"snapshot_changes.")
+
+    # B5: owners, and the platform's forecast next to our reading of it.
+    owners = checks.owner_rollup(in_scope, rotting_ids, index, ctx)
+    forecast = await checks.reconcile_forecast(client, in_scope, ctx)
+    if forecast.get("available") and forecast["disagreements"]:
+        summary += (f" FORECAST: {len(forecast['disagreements'])} deal(s) where /api/forecast "
+                    f"and the deal record disagree - see forecast_reconciliation.")
+    matching, compared = platform_formula_check(in_scope, index, now)
+    formula_note = (f"platform rot formula check: {matching} of {compared} agent-untouched open "
+                    f"deals match max(updated_at, latest linked Activity.created_at)")
+
     return CanonicalAnswer(deal_rot_days=threshold, analyzed_at=now.isoformat(),
                             deals=results, summary=summary, unavailable_note=threshold_note,
                             candidates_found=candidates_found, uncalled=uncalled,
@@ -1326,4 +1513,7 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                             late_orders=late_orders, worklist_by_owner=worklist,
                             escalations_needed=escalations, weighted_pipeline=weighted,
                             context_notes=ctx.notes + [
-                                f"{len(index.mismatched_links)} mismatched activity link(s)"])
+                                f"{len(index.mismatched_links)} mismatched activity link(s)",
+                                formula_note],
+                            rot_scores=rot_scores, snapshot_changes=snapshot_changes,
+                            owner_rollup=owners, forecast_reconciliation=forecast)

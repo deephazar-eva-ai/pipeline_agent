@@ -22,6 +22,7 @@ import asyncio
 import itertools
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -94,7 +95,8 @@ class JsonRpcTransport:
                  endpoint_path: str = "/api/mcp"):
         if not base_url:
             raise ValueError("MCP base URL is required (AGENTSWITCH_MCP_URL)")
-        self._url = base_url.rstrip("/") + endpoint_path
+        self._base = base_url.rstrip("/")
+        self._url = self._base + endpoint_path
         self._token = token
         self._timeout = timeout
         self._ids = itertools.count(1)
@@ -202,6 +204,35 @@ class JsonRpcTransport:
             if str(cursor) in seen_cursors:
                 raise TransportError(f"tools/list repeated cursor {cursor!r}", body=result)
             seen_cursors.add(str(cursor))
+
+    async def rest_get(self, path: str, params: dict | None = None) -> Any:
+        """One GET against the documented REST fallback, same bearer token.
+
+        Used for the two reads the MCP catalogue does not serve
+        (`/api/forecast`, `/api/deal-rot-config`). GET only: the REST door
+        is never used to write."""
+        return await asyncio.to_thread(self._get_blocking, path, params or {})
+
+    def _get_blocking(self, path: str, params: dict) -> Any:
+        query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        url = self._base + path + (f"?{query}" if query else "")
+        headers = {"Accept": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            raise TransportError(f"HTTP {exc.code} from GET {path}: {detail[:400]}",
+                                 status=exc.code, body=detail) from exc
+        except urllib.error.URLError as exc:
+            raise TransportError(f"cannot reach {url}: {exc.reason}") from exc
+        try:
+            return json.loads(raw.decode("utf-8")) if raw else None
+        except json.JSONDecodeError as exc:
+            raise TransportError(f"GET {path} reply was not json: {raw[:200]!r}") from exc
 
     def _post_blocking(self, payload: dict) -> Any:
         body = json.dumps(payload).encode("utf-8")

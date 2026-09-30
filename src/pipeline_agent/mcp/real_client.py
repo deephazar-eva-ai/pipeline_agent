@@ -58,6 +58,13 @@ def _normalise_result(tool: str, result: Any) -> Any:
     return result
 
 
+# The only REST paths this agent reads, and the only endpoint tool it may
+# write through. Allow-lists, not patterns: widening either is a code change
+# someone has to review.
+REST_READ_PATHS = frozenset({"/api/forecast", "/api/deal-rot-config"})
+WRITE_ENDPOINTS = frozenset({"endpoint.crm.call_notes.draft"})
+
+
 class RealMCPClient(MCPClient):
     def __init__(self, settings: Settings):
         settings.require_mcp_credentials()
@@ -88,6 +95,31 @@ class RealMCPClient(MCPClient):
             raise MCPToolError(name, str(exc),
                                raw=getattr(exc, "data", None) or getattr(exc, "body", None)) from exc
         # Endpoint tools wrap their payload as {"status": "ok", "result": ...}.
+        if isinstance(result, dict) and "result" in result and "status" in result:
+            return result["result"]
+        return result
+
+    async def get_rest(self, path: str, params: dict | None = None) -> Any:
+        if path not in REST_READ_PATHS:
+            raise MCPToolError(f"GET {path}", "not an allow-listed REST read for this agent")
+        try:
+            return await self._transport.rest_get(path, params)
+        except TransportError as exc:
+            if _is_permission_denied(exc):
+                raise PermissionDeniedError(f"GET {path}", path, "unknown",
+                                            raw=getattr(exc, "body", None)) from exc
+            raise MCPToolError(f"GET {path}", str(exc), raw=getattr(exc, "body", None)) from exc
+
+    async def call_write_endpoint(self, name: str, arguments: dict) -> Any:
+        if name not in WRITE_ENDPOINTS:
+            raise MCPToolError(name, "not an allow-listed write endpoint for this agent")
+        try:
+            result = await self._transport.call_tool(name, dict(arguments))
+        except (JsonRpcError, ToolResultError, TransportError) as exc:
+            raw = getattr(exc, "data", None) or getattr(exc, "body", None)
+            if _is_permission_denied(exc):
+                raise PermissionDeniedError(name, name, "unknown", raw=raw) from exc
+            raise MCPToolError(name, str(exc), raw=raw) from exc
         if isinstance(result, dict) and "result" in result and "status" in result:
             return result["result"]
         return result

@@ -90,9 +90,47 @@ RULES: tuple[GuardRule, ...] = (
 )
 
 
+# Questions no data this seat can read will answer (crm_gap_fillup.md B8).
+# Unlike RULES these are not unsafe - they are unanswerable, and the honest
+# reply is to say which data is missing and who holds it, not to estimate.
+DATA_LIMIT_RULES: tuple[GuardRule, ...] = (
+    GuardRule(
+        "stage_duration",
+        _rx(r"\b(how long|how many days|since when)\b.*\b(stage|new|qualification|proposal|"
+            r"negotiation)\b",
+            r"\b(time|days|weeks) (spent )?in (the |its |their |each |current )*stage\b"),
+        ("Deal",),
+        "Cannot say how long a deal has been in its stage: the platform stores no stage-entry "
+        "date or stage history. The agent's own run snapshots can bound it (the deal entered "
+        "its stage no later than the first snapshot that saw it there), and a canonical run "
+        "reports that bound in each row's rot_score - but it is a bound, not an answer."),
+    GuardRule(
+        "email_meeting_recency",
+        _rx(r"\b(last|latest|recent|most recent)\b.*\b(e-?mail(ed)?|meeting|met|calendar)\b",
+            r"\bwhen did we (e-?mail|meet)\b"),
+        ("EmailMessage", "CalendarEvent"),
+        "Cannot answer email or meeting history: EmailMessage and CalendarEvent are in the "
+        "email and scheduling apps, which are not in this seat's catalogue. Ask the Inbox seat "
+        "(10) or the Calendar seat (19). I can report the last call or contact logged in CRM."),
+    GuardRule(
+        "support_tickets",
+        _rx(r"\b(support )?tickets?\b", r"\bhelp ?desk\b"),
+        ("Ticket",),
+        "Cannot answer support-ticket questions: Ticket is in the support app, which is not in "
+        "this seat's catalogue. Ask the Helpdesk seat (15)."),
+    GuardRule(
+        "contract_renewal",
+        _rx(r"\bcontracts?\b.*\b(renew|renewal|expir\w*|end date|ends)\b",
+            r"\brenewal dates?\b"),
+        ("Contract",),
+        "Cannot answer contract or renewal questions: Contract is in the contracts app, which "
+        "is not in this seat's catalogue. Ask the Contract seat (17)."),
+)
+
+
 def check_request(text: str) -> RefusalResult | None:
     """A RefusalResult when the request matches a rule, else None."""
-    for rule in RULES:
+    for rule in RULES + DATA_LIMIT_RULES:
         if rule.pattern.search(text or ""):
             return RefusalResult(missing_domain="", missing_entities=list(rule.entities),
                                  tools_attempted=[], message=f"[{rule.code}] {rule.message}")

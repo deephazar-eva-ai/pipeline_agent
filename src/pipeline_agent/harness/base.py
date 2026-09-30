@@ -50,3 +50,6 @@ class TaskRun:
 
     created_record_ids: list[str] = field(default_factory=list)
     final_answer: Any = None
+    # crm_gap_fillup.md B8: which numbers in a loop answer no tool result
+    # backs. Filled by the harness, never by the model.
+    citation_check: dict = field(default_factory=dict)

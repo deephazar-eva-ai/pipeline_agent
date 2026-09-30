@@ -139,6 +139,19 @@ class MCPClient(abc.ABC):
         every caller treats the endpoint as an optional source."""
         raise MCPToolError(name, "endpoint tools are not supported by this client")
 
+    async def get_rest(self, path: str, params: dict | None = None) -> Any:
+        """One GET on the REST fallback, for the reads MCP does not serve
+        (`/api/forecast`, `/api/deal-rot-config`). Not abstract: a client
+        without REST says so, and every caller treats it as optional."""
+        raise MCPToolError(f"GET {path}", "REST reads are not supported by this client")
+
+    async def call_write_endpoint(self, name: str, arguments: dict) -> Any:
+        """Call one allow-listed `endpoint.*` tool that WRITES (today only
+        `endpoint.crm.call_notes.draft`). Kept apart from `call_endpoint`,
+        which is read-only by contract, so a write is always a deliberate
+        call site rather than a read helper used for something else."""
+        raise MCPToolError(name, "write endpoints are not supported by this client")
+
     async def get_schema(self, entity: str) -> Any:
         return await self.call_tool("get_schema", {"entity": entity})
 

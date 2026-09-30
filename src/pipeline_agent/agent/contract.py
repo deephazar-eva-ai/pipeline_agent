@@ -176,6 +176,16 @@ class CanonicalAnswer:
     weighted_pipeline: dict[str, Any] = field(default_factory=dict)
     # Which optional sources were read, which were not, and why.
     context_notes: list[str] = field(default_factory=list)
+    # crm_gap_fillup.md B3: the five-factor rot score over every open in-scope
+    # deal - band counts, and deals it rates at_risk/critical that the rot
+    # check did not flag. Per-deal detail is in each row's rot_evidence.
+    rot_scores: dict[str, Any] = field(default_factory=dict)
+    # B2: what changed since the previous snapshot of this tenant, plus the
+    # history-derived signals (regressions, close-date pushes).
+    snapshot_changes: dict[str, Any] = field(default_factory=dict)
+    # B5: per-owner rollup, and the platform forecast next to our reading.
+    owner_rollup: dict[str, Any] = field(default_factory=dict)
+    forecast_reconciliation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

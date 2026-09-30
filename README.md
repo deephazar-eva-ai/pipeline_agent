@@ -60,7 +60,13 @@ src/pipeline_agent/
     contract.py             the input/output contract (Phase 1)
     workflow.py              the deterministic canonical-task logic (Phase 2)
     refusal.py                builds the Track B refusal result (Phase 3)
+    pipeline_checks.py        advisory checks, leads, owner rollup, forecast reconciliation
+    request_guard.py          requests refused before any tool call
+    rot_score.py              five-factor rot score (gapreport §5), degraded honestly
+    snapshot.py               per-run snapshot.json, history and diff
+    habit.py                  digest: AgentMemory / AgentTodo / AgentEscalation, schedule
   preflight.py                 read-only probe: tool catalogue + entity access
+  catalogue_baseline.json      tool names per tenant, for preflight's drift check
   llm.py                        model backends for the loop (anthropic | ollama)
   runner.py                    CLI entry point (Phase 4)
 tasks/          human-authored task matrix goes here (schema only, so far)
@@ -75,6 +81,21 @@ runs/           run artifacts land here, gitignored except .gitkeep
 PYTHONPATH=src python3 -m pipeline_agent.runner --mode dry-run
 PYTHONPATH=src python3 -m pipeline_agent.runner --task preflight --mode live
 ```
+
+Phase 2 of the gap fill-up (`gapreport/crm_gap_fillup_implement_phase2.md`)
+adds two tasks and three flags:
+
+```
+PYTHONPATH=src python3 -m pipeline_agent.runner --task digest --mode live      # propose
+PYTHONPATH=src python3 -m pipeline_agent.runner --task schedule --mode live    # propose
+... --exec-mode create-next-actions --consent-by "NAME"   # any live write needs consent
+... --task log-contact ... --draft-call-note              # platform drafts a call note
+... --task schedule ... --persona-id <AgentPersona id>
+```
+
+Every full canonical or digest run writes `snapshot.json` next to
+`result.json`; later runs read those back for history. Every write-mode run
+writes `consent.json`.
 
 `--task preflight` is the first thing to run against any new credential. It is
 read-only (every probe is `list(entity, limit=1)`) and reports what the seat

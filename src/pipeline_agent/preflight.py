@@ -20,7 +20,9 @@ creates, updates, or transitions anything.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from pipeline_agent.mcp.client import (
@@ -82,6 +84,71 @@ SALES_ENTITIES = ("Deal", "Activity")
 # move is measured against today rather than against a stale number.
 RECORDED_TOOL_COUNT = 242
 
+# The names behind that count, per tenant, recorded 2026-09-30 from tools/list
+# on both instances (identical today). The count alone cannot say WHICH tool
+# moved; the 237 -> 238 change was never attributed for that reason.
+CATALOGUE_BASELINE = Path(__file__).with_name("catalogue_baseline.json")
+
+# The rot threshold as each source reported it, measured 2026-09-30 on both
+# instances. The three sources disagreed (14 / 30 / measured 5-9) until
+# 2026-09-25; a silent move back is exactly what this records.
+RECORDED_ROT_CONFIG = {
+    "suryodaya": {"default_rot_days": 30, "deal_rot_days": 30},
+    "keystone": {"default_rot_days": 30, "deal_rot_days": 30},
+}
+
+
+def load_catalogue_baseline(tenant: str) -> list[str] | None:
+    try:
+        doc = json.loads(CATALOGUE_BASELINE.read_text())
+    except (OSError, ValueError):
+        return None
+    names = (doc.get("tenants") or {}).get(tenant)
+    return sorted(names) if isinstance(names, list) else None
+
+
+def diff_catalogue(names: list[str], baseline: list[str]) -> tuple[list[str], list[str]]:
+    """(added, removed) against the recorded names."""
+    now, then = set(names), set(baseline)
+    return sorted(now - then), sorted(then - now)
+
+
+async def read_rot_config(client: MCPClient, notes: list[str]) -> dict[str, Any]:
+    """The threshold as each source states it today. Either may be missing."""
+    out: dict[str, Any] = {}
+    try:
+        cfg = await client.get_rest("/api/deal-rot-config")
+        if isinstance(cfg, dict):
+            out["default_rot_days"] = cfg.get("default_rot_days")
+    except MCPToolError as exc:
+        notes.append(f"deal-rot-config not read ({exc.message}) - rot config drift unchecked")
+    try:
+        resp = await client.list_("CRMPreferences", limit=1)
+        rows = resp.get("records") if isinstance(resp, dict) else None
+        if rows:
+            out["deal_rot_days"] = rows[0].get("deal_rot_days")
+    except MCPToolError as exc:
+        notes.append(f"CRMPreferences not read ({exc.message})")
+    return out
+
+
+def rot_config_changes(current: dict[str, Any], tenant: str | None) -> list[str]:
+    """Compared per tenant: the recorded values were measured on each
+    instance, and an unknown tenant has nothing to be compared against."""
+    changes = []
+    for key, recorded in RECORDED_ROT_CONFIG.get(tenant or "", {}).items():
+        if key not in current:
+            continue
+        try:
+            same = float(current[key]) == float(recorded)
+        except (TypeError, ValueError):
+            same = False
+        if not same:
+            changes.append(f"rot threshold {key} is {current[key]!r}, recorded {recorded} - "
+                           f"the rot boundary moved; re-check calibration before trusting "
+                           f"'rotting' counts")
+    return changes
+
 
 @dataclass
 class PreflightReport:
@@ -101,6 +168,10 @@ class PreflightReport:
     canonical_task_ready: bool = False
     changes_from_recorded_state: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Which tools appeared / vanished against catalogue_baseline.json.
+    tools_added: list[str] = field(default_factory=list)
+    tools_removed: list[str] = field(default_factory=list)
+    rot_config: dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> str:
         surface = (f"surface={self.detected_surface}"
@@ -152,7 +223,8 @@ def _gate_g1_verdict(probes: list[dict]) -> str:
     return "inconclusive"
 
 
-async def run_preflight(client: MCPClient, *, configured_surface: str) -> PreflightReport:
+async def run_preflight(client: MCPClient, *, configured_surface: str,
+                        tenant: str | None = None) -> PreflightReport:
     report = PreflightReport(configured_surface=configured_surface)
 
     try:
@@ -183,6 +255,14 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
                 f"tool catalogue size {report.tool_count}, recorded {RECORDED_TOOL_COUNT} - "
                 f"this seat's access boundary moved; diff tool_names against an earlier "
                 f"run artifact and update RECORDED_TOOL_COUNT once the change is understood")
+        baseline = (load_catalogue_baseline(tenant)
+                    if tenant and report.detected_surface == ENTITY_SCOPED else None)
+        if baseline is not None:
+            report.tools_added, report.tools_removed = diff_catalogue(names, baseline)
+            for name in report.tools_added:
+                report.changes_from_recorded_state.append(f"tool added since baseline: {name}")
+            for name in report.tools_removed:
+                report.changes_from_recorded_state.append(f"tool removed since baseline: {name}")
         present = set(names)
         required = CANONICAL_TASK_TOOLS.get(report.detected_surface, ())
         report.missing_canonical_tools = [t for t in required if t not in present]
@@ -214,6 +294,10 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
             report.notes.append(
                 f"optional {entity}: {probe['outcome']} ({probe['detail']}) - the canonical "
                 f"task will run without it (supplier-side deals will NOT be excluded)")
+
+    if report.detected_surface == ENTITY_SCOPED:
+        report.rot_config = await read_rot_config(client, report.notes)
+        report.changes_from_recorded_state.extend(rot_config_changes(report.rot_config, tenant))
 
     report.gate_g1 = _gate_g1_verdict(report.probes)
     # Readiness needs EVERY probe green, not just the Gate G1 verdict.

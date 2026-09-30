@@ -22,3 +22,6 @@ dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+pipeline_agent = ["catalogue_baseline.json"]

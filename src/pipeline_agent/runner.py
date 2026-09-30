@@ -22,8 +22,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from pipeline_agent.agent import habit
+from pipeline_agent.agent import snapshot as snap
 from pipeline_agent.agent.contract import AgentRequest, CanonicalAnswer, ExecutionMode, RefusalResult
-from pipeline_agent.agent.pipeline_checks import build_logged_contact, load_company_clock
+from pipeline_agent.agent.pipeline_checks import (
+    build_logged_contact, load_company_clock, tag_call_outcome,
+)
 from pipeline_agent.agent.request_guard import check_request
 from pipeline_agent.agent.workflow import run_canonical_task
 from pipeline_agent.mcp.client import MCPToolError
@@ -89,6 +93,29 @@ class LoggedContact:
     payload: dict
     record: dict | None
     message: str
+    # B10: keyword tags on the outcome (advisory), and the call-note draft
+    # the platform generated from the logged call, if one was requested.
+    outcome_tags: dict = dataclasses.field(default_factory=dict)
+    call_note_draft: dict | None = None
+
+
+@dataclasses.dataclass
+class ScheduleResult:
+    """Result of --task schedule (B7)."""
+
+    payload: dict
+    cron_line: str
+    written: bool
+    record: dict | None
+    message: str
+    caveat: str = ("An AgentTask runs the platform's own agent with this prompt; it does not "
+                   "run this repository's code, so it has none of the independent rot "
+                   "check, laundering defence or dedupe rules. The local cron line runs "
+                   "this agent itself.")
+
+
+# Tasks that can write to the shared book in create-next-actions mode.
+WRITE_TASKS = ("canonical", "log-contact", "digest", "schedule")
 
 
 async def log_contact(client: Any, args: argparse.Namespace, *, run_id: str) -> Any:
@@ -119,12 +146,99 @@ async def log_contact(client: Any, args: argparse.Namespace, *, run_id: str) -> 
                                    actual_date=actual.isoformat(), today=now.date().isoformat(),
                                    outcome=args.outcome or "contact reported by user",
                                    run_id=run_id)
+    tags = tag_call_outcome(args.outcome or "")
     if args.exec_mode != ExecutionMode.CREATE_NEXT_ACTIONS.value:
-        return LoggedContact(False, payload, None, "propose mode - not written")
+        return LoggedContact(False, payload, None, "propose mode - not written",
+                             outcome_tags=tags)
     record = await client.create("Activity", payload)
-    return LoggedContact(True, payload, record,
-                         f"logged; due_date is {payload['due_date']} because the platform "
-                         f"cannot backdate, real date {actual} recorded in the row")
+    message = (f"logged; due_date is {payload['due_date']} because the platform "
+               f"cannot backdate, real date {actual} recorded in the row")
+    draft = None
+    if args.draft_call_note and isinstance(record, dict) and record.get("id"):
+        if args.contact_type != "call":
+            message += "; call-note draft skipped - only a call can be drafted from"
+        else:
+            # B10: the platform drafts a note from the logged call. The agent
+            # never approves it - approval is a person's step.
+            try:
+                draft = await client.call_write_endpoint("endpoint.crm.call_notes.draft", {
+                    "activity_id": record["id"], "operation_key": f"pa-{run_id[:32]}"})
+                message += "; call-note draft requested - a person must review and approve it"
+            except MCPToolError as e:
+                message += f"; call-note draft not created ({e.message})"
+    return LoggedContact(True, payload, record, message, outcome_tags=tags,
+                         call_note_draft=draft if isinstance(draft, dict) else None)
+
+
+async def schedule_digest(client: Any, args: argparse.Namespace, *, tz_name: str) -> Any:
+    """B7: the AgentTask record for the daily digest, and the local cron line."""
+    persona = args.persona_id or os.environ.get("PIPELINE_PERSONA_ID")
+    payload = habit.agent_task_payload(persona)
+    cron = habit.local_cron_line(str(Path.cwd()), tz_name)
+    if args.exec_mode != ExecutionMode.CREATE_NEXT_ACTIONS.value:
+        return ScheduleResult(payload, cron, False, None, "propose mode - not written")
+    if not persona:
+        return RefusalResult("", ["AgentTask"], [], (
+            "schedule needs --persona-id (or PIPELINE_PERSONA_ID): half of this tenant's "
+            "scheduled runs went to personas with filler prompts (bug 9), so the task is "
+            "never created without naming the persona it must run under"))
+    existing = await client.list_("AgentTask", search=habit.TASK_NAME, limit=50)
+    for row in (existing.get("records") or []) if isinstance(existing, dict) else []:
+        if habit.HABIT_MARKER in str(row.get("description") or ""):
+            return ScheduleResult(payload, cron, False, row,
+                                  f"already scheduled as AgentTask {row.get('id')} - not "
+                                  f"creating a second one")
+    record = await client.create("AgentTask", payload)
+    back = await client.get("AgentTask", record["id"]) if isinstance(record, dict) \
+        and record.get("id") else None
+    ran_as = (back or {}).get("persona_id")
+    note = ("persona confirmed on read-back" if ran_as == persona else
+            f"WARNING: read back persona_id {ran_as!r}, asked for {persona!r}")
+    return ScheduleResult(payload, cron, True, back or record,
+                          f"created AgentTask {(back or record).get('id')}; {note}")
+
+
+def _report_extras(result: CanonicalAnswer) -> None:
+    """The crm_gap_fillup.md phase 2 sections of a canonical answer."""
+    rs = result.rot_scores
+    if rs:
+        print(f"\nrot_scores: " + ", ".join(f"{k}={v}" for k, v in rs["bands"].items())
+              + f" (history snapshots: {rs['history_snapshots']})")
+        for r in rs["scored_but_not_flagged"]:
+            print(f"  not flagged by the rot check: {r['title'][:40]:<40} "
+                  f"{r['rot_band']} {r['rot_score']}  {r['rot_comment'][:90]}")
+    sc = result.snapshot_changes
+    if sc:
+        if sc.get("previous_snapshot"):
+            changed = {k: len(v) for k, v in (sc.get("changed") or {}).items()}
+            print(f"\nsince snapshot {sc['previous_snapshot'][:19]}: "
+                  f"{len(sc.get('new_deals', []))} new, {len(sc.get('gone_deals', []))} gone, "
+                  f"changed {changed or 'nothing'}; regressions={len(sc['regressions'])}, "
+                  f"close-date pushes={len(sc['close_date_pushes'])}")
+        else:
+            print(f"\nsnapshot: {sc.get('note')}")
+    if result.owner_rollup:
+        print(f"\nowner_rollup ({len(result.owner_rollup)}):")
+        for owner, r in list(result.owner_rollup.items())[:10]:
+            print(f"  {owner[:30]:<30} open {r['open_deals']:>3} ({r['open_value']:,.0f})  "
+                  f"rotting {r['rotting_deals']:>3} ({r['rotting_value']:,.0f})  won "
+                  f"{r['won_value']:,.0f}  customers called <=30d "
+                  f"{r['customers_called_last_30d']}/{r['customers']}")
+    fc = result.forecast_reconciliation
+    if fc:
+        if not fc.get("available"):
+            print(f"\nforecast_reconciliation: not available ({fc.get('reason')})")
+        else:
+            print(f"\nforecast_reconciliation: platform weighted "
+                  f"{fc['platform_weighted_total']:,.0f} vs ours "
+                  f"{fc['our_weighted_total_same_deals']:,.0f} on the same deals; "
+                  f"{len(fc['disagreements'])} disagreement(s), "
+                  f"{len(fc['past_dated_buckets'])} past-dated bucket(s), "
+                  f"{fc['open_deals_not_in_forecast']} open deal(s) not in the forecast")
+            for d in fc["disagreements"][:10]:
+                print(f"  {d['title'][:40]:<40} {d['period']}  platform "
+                      f"{d['platform_weighted']:,.0f} vs ours {d['our_weighted']:,.0f}: "
+                      f"{'; '.join(d['reasons'])[:100]}")
 
 
 def _report_result(run: TaskRun, result: Any) -> None:
@@ -196,8 +310,53 @@ def _report_result(run: TaskRun, result: Any) -> None:
         for e in result.escalations_needed:
             print(f"  {str(e.get('deal_id') or e.get('party'))[:30]}: {e['why'][:110]} -> "
                   f"decide {e['decide']}")
+        _report_extras(result)
         for note in result.context_notes:
             print(f"note: {note}")
+
+    elif isinstance(result, habit.HabitDigest):
+        run.claimed_success = True
+        run.ended = "done"
+        run.created_record_ids = [w["id"] for w in result.written if w.get("id")]
+        print(f"digest {result.today} ({result.mode})")
+        print(f"\nstill flagged ({len(result.still_flagged)}):")
+        for r in result.still_flagged:
+            print(f"  day {r['day']:>3}  {str(r['title'])[:44]:<44} {r['rot_days']}d  "
+                  f"band={r['rot_band']}")
+        print(f"\nnewly flagged ({len(result.newly_flagged)}):")
+        for r in result.newly_flagged:
+            print(f"  {str(r['title'])[:50]:<50} {r['rot_days']}d  band={r['rot_band']}")
+        if result.resolved:
+            print(f"\nno longer rotting ({len(result.resolved)}): "
+                  + ", ".join(str(r["deal_id"])[:8] for r in result.resolved))
+        print(f"\ndecisions for a person ({len(result.todos)}):")
+        for t in result.todos:
+            print(f"  {'[open] ' if t['already_open'] else ''}{t['title'][:100]}")
+        print(f"\nescalations ({len(result.escalations)}):")
+        for e in result.escalations:
+            print(f"  {'[open] ' if e['already_open'] else ''}{str(e['title'])[:50]}: "
+                  f"{e['why'][:90]}")
+        print(f"\ncross-seat requests ({len(result.cross_seat_requests)}):")
+        for c in result.cross_seat_requests:
+            print(f"  {c['seat']}: {c['question']} for {len(c['party_ids'])} customer(s) "
+                  f"[{c['status']}]")
+        for w in result.written:
+            print(f"written: {w['entity']} {w.get('id')}")
+        for w in result.not_written:
+            print(f"not written: {w}")
+        for note in result.notes:
+            print(f"note: {note}")
+
+    elif isinstance(result, ScheduleResult):
+        run.claimed_success = True
+        run.ended = "done"
+        if result.written and isinstance(result.record, dict) and result.record.get("id"):
+            run.created_record_ids = [result.record["id"]]
+        print(f"schedule: {result.message}")
+        print(f"  AgentTask: {result.payload}")
+        print(f"  local cron (runs this agent):\n    "
+              + result.cron_line.replace("\n", "\n    "))
+        print(f"  caveat: {result.caveat}")
 
     elif isinstance(result, LoggedContact):
         run.claimed_success = True
@@ -207,6 +366,11 @@ def _report_result(run: TaskRun, result: Any) -> None:
         print(f"log-contact: {result.message}")
         print(f"  {result.payload['type']} '{result.payload['subject']}' due_date="
               f"{result.payload['due_date']}")
+        if result.outcome_tags.get("tags"):
+            print(f"  outcome tags (keyword-inferred, advisory): "
+                  f"{', '.join(result.outcome_tags['tags'])}")
+        if result.call_note_draft and result.call_note_draft.get("id"):
+            run.created_record_ids.append(result.call_note_draft["id"])
 
     elif isinstance(result, RefusalResult):
         run.claimed_success = False
@@ -232,6 +396,11 @@ def _report_result(run: TaskRun, result: Any) -> None:
 async def main_async(args: argparse.Namespace) -> int:
     _load_dotenv()
     settings = Settings.from_env()
+    if settings.tenant not in ("", "unknown"):
+        # The tenant is derived from the URL; the company clock reads it from
+        # the environment to pick the tenant's timezone. Without this every
+        # live run fell back to UTC ("default (no timezone configured)").
+        os.environ.setdefault("AGENTSWITCH_TENANT", settings.tenant)
     try:
         client = StubMCPClient() if args.mode == "dry-run" else RealMCPClient(settings)
         llm = build_llm(settings.model_name) if args.task == "loop" else None
@@ -239,6 +408,15 @@ async def main_async(args: argparse.Namespace) -> int:
         # Misconfiguration, not a failed run: no artifact is written, because
         # nothing ran. A stack trace here would bury an actionable message.
         print(f"cannot start: {exc}")
+        return 2
+
+    writes = (args.task in WRITE_TASKS
+              and args.exec_mode == ExecutionMode.CREATE_NEXT_ACTIONS.value)
+    if writes and args.mode == "live" and not (args.consent_by or "").strip():
+        # B9: a live write to a shared book needs a named person's go-ahead,
+        # recorded in the run. Refused before any tool call.
+        print("cannot start: a live write needs --consent-by NAME (who agreed to this run "
+              "writing to the shared book); it is recorded in consent.json")
         return 2
 
     run_id = uuid.uuid4().hex
@@ -264,14 +442,40 @@ async def main_async(args: argparse.Namespace) -> int:
                 # handing it the recorder would log every call twice.
                 run = await run_loop(task, client, llm, settings.model_name,
                                       max_steps=args.max_steps)
+            elif args.task == "schedule":
+                recorder = RecordingMCPClient(client, run.steps)
+                _, tz_name, _ = await load_company_clock(
+                    recorder, os.environ.get("PIPELINE_TIMEZONE"), [])
+                result = await schedule_digest(recorder, args, tz_name=tz_name)
             elif args.task == "preflight":
                 result = await run_preflight(RecordingMCPClient(client, run.steps),
-                                              configured_surface=settings.mcp_tool_surface)
+                                              configured_surface=settings.mcp_tool_surface,
+                                              tenant=settings.tenant)
             else:
-                request = AgentRequest(text=args.request, mode=ExecutionMode(args.exec_mode),
+                # canonical, or digest: the digest is the canonical answer in
+                # propose mode, plus memory / to-dos / escalations (B7).
+                digest = args.task == "digest"
+                mode = ExecutionMode.PROPOSE if digest else ExecutionMode(args.exec_mode)
+                request = AgentRequest(text=args.request, mode=mode,
                                         max_deals=args.limit, deal_ids=args.deal_id or None)
-                result = await run_canonical_task(RecordingMCPClient(client, run.steps),
-                                                   request, run_id=run_id)
+                snapshot_tenant = "stub" if args.mode == "dry-run" else settings.tenant
+                history = snap.load_history(settings.output_dir, snapshot_tenant)
+                rows: list[dict] = []
+                recorder = RecordingMCPClient(client, run.steps)
+                result = await run_canonical_task(recorder, request, run_id=run_id,
+                                                   history=history, snapshot_sink=rows)
+                if isinstance(result, CanonicalAnswer) and not request.deal_ids \
+                        and request.max_deals is None:
+                    # Only a full-book run is a snapshot: a capped run would
+                    # read as every other deal having vanished.
+                    snap.write_snapshot(writer.run_dir, snap.snapshot_document(
+                        rows, tenant=snapshot_tenant, captured_at=result.analyzed_at,
+                        run_id=run_id, reason="scheduled" if digest else "manual"))
+                if digest and isinstance(result, CanonicalAnswer):
+                    result = await habit.run_digest(
+                        recorder, result, rows, today=result.analyzed_at[:10],
+                        value_p90=result.rot_scores.get("value_p90"),
+                        write=writes, run_id=run_id)
         except Exception as exc:
             run.error = f"{type(exc).__name__}: {exc}"
             run.ended = "error"
@@ -286,8 +490,22 @@ async def main_async(args: argparse.Namespace) -> int:
                   f"claimed_success={run.claimed_success}")
             if run.error:
                 print(f"error: {run.error}")
+            if run.citation_check:
+                c = run.citation_check
+                print(f"citations: {'all numbers and dates backed by a tool result' if c['supported'] else 'UNSUPPORTED'}"
+                      f" ({c['numbers_checked']} numbers, {c['dates_checked']} dates checked)"
+                      + (f"; not found in any tool result: {c['unsupported_numbers']} "
+                         f"{c['unsupported_dates']}" if not c["supported"] else ""))
         else:
             _report_result(run, result)
+        if writes:
+            writer.write_consent({
+                "consent_by": (args.consent_by or "").strip()
+                or "not given (dry-run against the stub; nothing reached a live book)",
+                "mode": args.mode, "task": args.task, "exec_mode": args.exec_mode,
+                "limit": args.limit, "deal_ids": args.deal_id,
+                "created_record_ids": run.created_record_ids,
+                "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         writer.finalize(run)
         print(f"run artifact: {writer.run_dir}")
 
@@ -304,13 +522,25 @@ def main() -> int:
     parser.add_argument("--contact-type", choices=["call", "meeting", "email"], default="call",
                          help="log-contact: what kind of contact it was.")
     parser.add_argument("--outcome", default=None, help="log-contact: what was agreed.")
-    parser.add_argument("--task", choices=["canonical", "preflight", "loop", "log-contact"],
+    parser.add_argument("--consent-by", default=None,
+                         help="who agreed to this run writing to the shared book. Required "
+                              "for any live create-next-actions run; recorded in consent.json.")
+    parser.add_argument("--draft-call-note", action="store_true",
+                         help="log-contact: after logging a call, ask the platform to draft "
+                              "a call note from it (never approved by the agent).")
+    parser.add_argument("--persona-id", default=None,
+                         help="schedule: the AgentPersona the digest task must run under.")
+    parser.add_argument("--task", choices=["canonical", "preflight", "loop", "log-contact",
+                                           "digest", "schedule"],
                          default="canonical",
                          help="canonical runs the three-part pipeline question through the "
                               "deterministic workflow; preflight is a read-only capability probe "
                               "(tool catalogue + entity access) that re-checks Gate G1 instead of "
                               "trusting the recorded result; loop hands --request to the "
-                              "model-driven loop, which picks its own tool calls (needs MODEL_NAME).")
+                              "model-driven loop, which picks its own tool calls (needs MODEL_NAME); "
+                              "digest runs canonical in propose mode and adds memory, to-dos and "
+                              "escalations (written only with --exec-mode create-next-actions); "
+                              "schedule proposes the daily AgentTask and a local cron line.")
     parser.add_argument("--max-steps", type=int, default=12,
                          help="maximum model turns for --task loop.")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")

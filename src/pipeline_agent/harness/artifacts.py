@@ -44,6 +44,12 @@ class RunArtifactWriter:
         (self.run_dir / "result.json").write_text(json.dumps(payload, indent=2, default=str))
         self._write_status("failed" if run.error and run.ended != "refused" else "completed")
 
+    def write_consent(self, ledger: dict) -> None:
+        """crm_gap_fillup.md B9: who allowed this run to write, within what
+        limits, and what it created. Stands in for ApprovalRequest, which
+        this seat cannot reach (approvals app, 403)."""
+        (self.run_dir / "consent.json").write_text(json.dumps(ledger, indent=2, default=str))
+
     def mark_failed(self, error: str) -> None:
         (self.run_dir / "error.txt").write_text(error)
         self._write_status("failed")
