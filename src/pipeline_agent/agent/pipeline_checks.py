@@ -18,6 +18,7 @@ Two rules hold throughout:
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +61,14 @@ US_FEDERAL_HOLIDAYS = frozenset(dt.date.fromisoformat(d) for d in (
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-05-31", "2027-06-18", "2027-07-05",
     "2027-09-06", "2027-10-11", "2027-11-11", "2027-11-25", "2027-12-24",
 ))
+
+# Company rows currently omit a timezone on both known tenants.  Falling back
+# to UTC makes "today", overdue work, and 30-day windows wrong around each
+# business day's boundary.  An explicit PIPELINE_TIMEZONE still wins.
+TENANT_DEFAULT_TIMEZONES = {
+    "keystone": "America/New_York",
+    "suryodaya": "Asia/Kolkata",
+}
 
 UUID_TITLE = re.compile(r"^Deal from [0-9a-f]{8}-[0-9a-f]{4}-", re.IGNORECASE)
 
@@ -215,15 +224,19 @@ async def load_company_clock(client: MCPClient, env_tz: str | None,
 
     Keystone is in Ohio; the server stores UTC and the agent may run in IST.
     'Today', 'overdue' and '30 days' should mean the company's day. Order:
-    Company.timezone, then PIPELINE_TIMEZONE, then UTC - and the run says which."""
+    Company.timezone, then PIPELINE_TIMEZONE, then a known tenant default, then UTC - and the run says which."""
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
     company: dict = {}
     rows = await _read_all(client, "Company", [])
     if rows:
         company = rows[0]
-    tz_name = (company.get("timezone") or company.get("time_zone") or env_tz or "UTC")
+    tenant_tz = TENANT_DEFAULT_TIMEZONES.get(
+        os.environ.get("AGENTSWITCH_TENANT", "").strip().lower(), ""
+    )
+    tz_name = (company.get("timezone") or company.get("time_zone") or env_tz or tenant_tz or "UTC")
     source = ("Company.timezone" if company.get("timezone") or company.get("time_zone")
-              else "PIPELINE_TIMEZONE" if env_tz else "default (no timezone configured)")
+              else "PIPELINE_TIMEZONE" if env_tz
+              else "tenant default" if tenant_tz else "default (no timezone configured)")
     try:
         tz = ZoneInfo(str(tz_name))
     except (ZoneInfoNotFoundError, ValueError):

@@ -1,0 +1,203 @@
+{
+  "metadata": {
+    "default_currency": "USD",
+    "as_of_date": "2026-09-28",
+    "tax_configuration_version": "example-us-oh-pa-2026-09-28",
+    "fixture_notice": "Synthetic example only. It is not a Keystone production capture."
+  },
+  "taxable_documents": [
+    {
+      "id": "QTN-US-TAX-001",
+      "document_type": "Quotation",
+      "party_id": "party-taxable-oh-001",
+      "currency": "USD",
+      "place_of_supply": "OH",
+      "net_total": "100.00",
+      "tax_total": "6.50",
+      "grand_total": "106.50",
+      "tax_components": [
+        {
+          "jurisdiction": "OH state",
+          "rate": "0.0575",
+          "amount": "5.75",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        },
+        {
+          "jurisdiction": "Stark County, OH",
+          "rate": "0.0075",
+          "amount": "0.75",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        }
+      ]
+    },
+    {
+      "id": "SO-US-TAX-001",
+      "document_type": "SalesOrder",
+      "party_id": "party-taxable-oh-001",
+      "currency": "USD",
+      "place_of_supply": "OH",
+      "net_total": "100.00",
+      "tax_total": "6.50",
+      "grand_total": "106.50",
+      "tax_components": [
+        {
+          "jurisdiction": "OH state",
+          "rate": "0.0575",
+          "amount": "5.75",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        },
+        {
+          "jurisdiction": "Stark County, OH",
+          "rate": "0.0075",
+          "amount": "0.75",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        }
+      ]
+    }
+  ],
+  "exempt_documents": [
+    {
+      "id": "QTN-US-EXEMPT-NULL-POS-001",
+      "document_type": "Quotation",
+      "party_id": "party-resale-001",
+      "currency": "USD",
+      "party_taxable": false,
+      "valid_resale_certificate": true,
+      "place_of_supply": null,
+      "net_total": "149229.60",
+      "tax_total": "0.00",
+      "grand_total": "149229.60",
+      "tax_components": [
+        {
+          "jurisdiction": "resale exemption",
+          "rate": "0.00",
+          "amount": "0.00",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        }
+      ]
+    },
+    {
+      "id": "SO-US-EXEMPT-OH-POS-001",
+      "document_type": "SalesOrder",
+      "party_id": "party-resale-001",
+      "currency": "USD",
+      "party_taxable": false,
+      "valid_resale_certificate": true,
+      "place_of_supply": "OH",
+      "net_total": "149229.60",
+      "tax_total": "0.00",
+      "grand_total": "149229.60",
+      "tax_components": [
+        {
+          "jurisdiction": "resale exemption",
+          "rate": "0.00",
+          "amount": "0.00",
+          "cgst": "0.00",
+          "sgst": "0.00",
+          "igst": "0.00"
+        }
+      ]
+    }
+  ],
+  "equivalent_path_pairs": [
+    {
+      "web_document_id": "SO-US-TAX-001",
+      "quote_document_id": "QTN-US-TAX-001",
+      "equivalent_inputs": true
+    }
+  ],
+  "sourcing_override_cases": [
+    {
+      "equivalent_inputs": false,
+      "place_of_supply": "OH",
+      "sourcing_reason": "Synthetic FOB-origin example with a documented OH sourcing override."
+    }
+  ],
+  "conversion_pairs": [
+    {
+      "quotation_id": "QTN-US-TAX-001",
+      "sales_order_id": "SO-US-TAX-001"
+    }
+  ],
+  "orders": [
+    {
+      "id": "SO-US-LATE-001:1",
+      "promised_date": "2026-09-27",
+      "ordered_qty": "10",
+      "delivered_qty": "0",
+      "delivered_status": "undelivered",
+      "late": true
+    },
+    {
+      "id": "SO-US-DUE-TODAY-001:1",
+      "promised_date": "2026-09-28",
+      "ordered_qty": "10",
+      "delivered_qty": "0",
+      "delivered_status": "undelivered",
+      "late": false
+    },
+    {
+      "id": "SO-US-FUTURE-001:1",
+      "promised_date": "2026-09-29",
+      "ordered_qty": "10",
+      "delivered_qty": "0",
+      "delivered_status": "undelivered",
+      "late": false
+    },
+    {
+      "id": "SO-US-DELIVERED-001:1",
+      "promised_date": "2026-09-20",
+      "ordered_qty": "10",
+      "delivered_qty": "10",
+      "delivered_status": "delivered",
+      "late": false
+    }
+  ],
+  "make_orders_late_filter": {
+    "late_count": 1,
+    "late_true_ids": [
+      "SO-US-LATE-001:1"
+    ],
+    "invalid_value_status": 422
+  },
+  "jurisdiction_validation_cases": [
+    {
+      "input": "US customer address without state/postal code",
+      "outcome": "needs_review",
+      "reason": "Synthetic fixture: jurisdiction cannot be resolved without a complete address."
+    },
+    {
+      "input": "place_of_supply differs from customer state without sourcing evidence",
+      "outcome": "warning",
+      "reason": "Synthetic fixture: require an explicit sourcing rationale before tax is finalized."
+    }
+  ],
+  "conversion_api_contract": {
+    "source_quotation_currency_code": "USD",
+    "converted_order_currency_code": "USD",
+    "required_sales_order_fields": [
+      "currency_code",
+      "net_total",
+      "total_tax",
+      "grand_total"
+    ]
+  },
+  "us_tenant_contract": {
+    "tenant": "keystone",
+    "forbidden_india_tax_fields": [
+      "gst_no",
+      "gst_treatment",
+      "is_reverse_charge"
+    ]
+  }
+}

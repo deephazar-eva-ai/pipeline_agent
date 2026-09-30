@@ -1,8 +1,9 @@
-"""Make the source-layout package importable when tests run from a checkout."""
+"""Make the source-layout package importable from either checkout entry point."""
 from pathlib import Path
 import sys
 
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC = PROJECT_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))

@@ -1,10 +1,16 @@
-# Tests
+# Pipeline Agent tests
 
-This directory contains the copied manual regression suite for Pipeline Agent.
-The tests cover deterministic workflow behaviour, stubs, CLI startup,
-artifacts, JSON-RPC/REST boundaries, LLM configuration, and guard regressions.
-They are not a substitute for a human-authored scored verifier or for direct
-postcondition checks against the live CRM.
+This directory contains the runnable, offline regression suite for Pipeline
+Agent. It currently contains 13 test modules and **272 passing tests**. The
+suite covers deterministic workflow behavior, preflight and request guards,
+stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
+and Keystone-specific data and tenant contracts.
+
+It is not a scored, human-authored verifier and it cannot prove a shared-CRM
+postcondition. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
+[EVIDENCE.md](EVIDENCE.md) for the latest execution record, and
+[US_ENTITY_SNAPSHOT_SCHEMA.md](US_ENTITY_SNAPSHOT_SCHEMA.md) for the synthetic
+US fixture contract.
 
 ## Run the suite
 
@@ -20,28 +26,47 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
+The latest local execution was on **2026-09-30**: `272 passed in 0.38s`.
+
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
-and the tests use `pipeline_agent.*` imports. Shared test fixtures are
-imported with explicit package-relative imports.
+and `__init__.py` intentionally keeps `tests` a package because several
+modules share fixtures with package-relative imports. Do not remove either
+file.
+
+`keystone_us_entity_snapshot.example.json` is intentionally synthetic, is
+loaded only by the snapshot test, and contains no live tenant data.
 
 ## Test modules
 
-- `test_guard_regressions.py` — guard-activation and preflight regressions.
-- `test_catalogue_unit_stub.py` — safe unit and stub catalogue coverage.
-- `test_nonwrite_workflows.py` — canonical workflow, cap, scope, and CLI tests.
-- `test_remaining_offline_catalogue.py` — additional safe boundaries and
-  artifact/workflow behaviour.
-- `test_transport_llm_contracts.py` — JSON-RPC transport, REST-boundary, and
-  LLM configuration contracts.
-- `test_contract_boundaries.py` — tool-surface, timestamp, provenance, and
-  runner-result boundaries.
-- `test_logged_bug_regressions.py` — defensive handling of Pipeline-relevant
-  defects observed in live bug reports.
+- `test_guard_regressions.py` — preflight, pagination, refusal, credential,
+  loop, and write/propose safety regressions.
+- `test_catalogue_unit_stub.py` — contact/rot logic, stub workflow outcomes,
+  artifacts, and safe refusal paths.
+- `test_nonwrite_workflows.py` and `test_remaining_offline_catalogue.py` —
+  canonical propose workflow, caps, repeatability, request bounds, and
+  artifact behavior.
+- `test_transport_llm_contracts.py` and `test_contract_boundaries.py` — MCP
+  wire translation, JSON-RPC/HTTP failures, timestamps, provenance, runner
+  states, and model-backend configuration.
+- `test_logged_bug_regressions.py` — defenses for previously observed
+  Pipeline data and workflow edge cases.
+- `test_keystone_pipeline_regressions.py`,
+  `test_keystone_application_boundaries.py`,
+  `test_keystone_agent_fixes.py`, and `test_keystone_catalogue_gaps.py` —
+  contact-age, rot, linkage, action-state, and supplier-scope regressions.
+- `test_keystone_enhancement_regressions.py` — advisory/worklist checks,
+  request guards, data quality, tenant detection, and timezone behavior.
+- `test_keystone_us_entity_snapshots.py` — read-only validation of the
+  bundled synthetic US tax, conversion, and fulfillment fixture.
+- `keystone_support.py` — fixed-clock Activity client and CRM record builders
+  shared by Keystone scenarios.
 
 ## Live verification
 
-Tests are offline by default and do not create CRM records. Live preflight and
-canonical propose-mode verification require `AGENTSWITCH_MCP_URL` and
-`AGENTSWITCH_MCP_TOKEN`; keep credentials in the ignored `.env` file and use
-`--exec-mode propose` for read-only verification. Write-mode tests remain
-opt-in and require explicit approval.
+Tests are offline by default and do not create CRM records. The most recent
+recorded live read-only verification is dated 2026-09-29 in
+[EVIDENCE.md](EVIDENCE.md); it was not rerun as part of the 2026-09-30 offline
+suite. Live preflight and canonical propose-mode verification require
+`AGENTSWITCH_MCP_URL` and `AGENTSWITCH_MCP_TOKEN`. Use `--exec-mode propose`
+for read-only verification. Write-mode execution remains opt-in and requires
+explicit approval, captured preconditions, and direct postcondition checks.

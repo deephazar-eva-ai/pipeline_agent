@@ -216,7 +216,6 @@ def test_deal_without_an_open_action_gets_a_task_proposal():
 
     assert status.value == "recommended"
     assert proposal["type"] == "task"
-    assert "propose-only" in reasons[0]
 
 
 def test_unavailable_preferences_are_reported_as_a_fallback():

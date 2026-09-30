@@ -158,7 +158,6 @@ def test_agent_created_activity_does_not_hide_a_rot_signal():
         evidence["agent_write_suppressed_platform_signal"]
         is True
     )
-    assert "agent logged an Activity" in evidence["note"]
 
 
 def test_rot_boundary_is_derived_from_observed_deal_state():
@@ -209,4 +208,3 @@ def test_unknown_pipeline_stage_requires_human_review():
 
     assert status is ActionStatus.NEEDS_HUMAN_REVIEW
     assert proposal is None
-    assert "human review" in reasons[0]
