@@ -369,6 +369,8 @@ The report bodies are in `EAG_V3_capstone/bugs/hunt_bugs_2026-09-30.json` and th
 | F2 | The model loop could call `create`, `update` and `transition` with no consent | The claim in B9 that every live write needs consent was false for `--task loop` | The loop refuses write tools unless the run is `create-next-actions` with `--consent-by`. `loop` joins the consent-gated tasks. |
 | F3 | Two new refusal patterns were too broad | "How many days since the last call to new customers?" was refused as a stage-duration question, because it contains "new". "…where the target was met" was refused as meeting history, because of "met". | Stage names now count only after "in", "at" or "entered". "met" was dropped from the meeting pattern. |
 
+**Decision, 2026-09-30:** digest escalations go to **Meera Kulkarni**. `PIPELINE_ESCALATION_ASSIGNEE` is set to her Suryodaya party id, `99e50109-63ca-48a5-be61-c6a2589169d2`, in `.env` and `.env.example`. This keeps the choice fixed even if more assignees appear later. On Keystone that id is not offered, so nothing is raised there.
+
 **Checks after the fixes:**
 - The existing suite still passes, 272 of 272, with no test edited.
 - The scenario script now has 77 checks, all passing. The new ones cover:
