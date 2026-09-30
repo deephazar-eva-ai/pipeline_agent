@@ -141,14 +141,14 @@ Calls are counted per customer because Activity has no reliable field for the re
 |---|---|
 | `AgentMemory` (relationship, per party, expires after 45 days) | The first day each rotting deal was flagged. Later digests report "day N" instead of repeating the deal as news. A memory is never rewritten while its deal is still flagged, because rewriting would reset the count. |
 | `AgentTodo` | Decisions only a person may make: an unmapped stage, an overdue task, an owner to assign, a re-quote, close-lost. Also one request to each other seat whose data this seat cannot read: Inbox and Calendar (10, 19), AR through EA (2 via 28), Helpdesk (15), Contract (17). |
-| `AgentEscalation` on one `AgentSession` per digest | Rotting deals that the score rates critical, or that are in the top 10% by value with a close date more than 14 days past. |
+| An escalation, raised through `escalations.raise` on its own `AgentSession` | Rotting deals that the score rates critical, or that are in the top 10% by value with a close date more than 14 days past. It goes to a named assignee with a 1,440-minute SLA. The agent uses `PIPELINE_ESCALATION_ASSIGNEE` when set, otherwise the only person offered. With no one offered (Keystone) or several, nothing is raised and the digest says why. It never uses `AgentEscalation.create`, which makes an unowned escalation with no SLA (platform Bug 18; see §9). |
 
 **Safety rules, enforced in code:**
 - Nothing is written unless the run is `--exec-mode create-next-actions`. A live write also needs `--consent-by` (B9).
 - Every record carries a marker and a key.
 - Before writing, the agent lists what it wrote earlier and skips any key that is still open.
 - If that earlier read fails, nothing of that kind is written.
-- At most 25 records are written per run. The rest are listed as "not written (cap)".
+- At most 25 records are written per run, and an escalation counts as two (its session and the escalation). The rest are listed as "not written (cap)".
 
 **`--task schedule`** proposes an `AgentTask` for the daily digest (weekdays at 09:00) and prints a local cron line.
 - In write mode it needs `--persona-id`: half of this tenant's scheduled runs went to personas with filler prompts (bug 9).
@@ -178,7 +178,8 @@ These rules sit in a separate tuple, `DATA_LIMIT_RULES`, so the existing rule se
 ### B9. Consent ledger
 **Files:** [`runner.py`](../src/pipeline_agent/runner.py), [`harness/artifacts.py`](../src/pipeline_agent/harness/artifacts.py).
 
-- **The gate.** Any live `--exec-mode create-next-actions` run (canonical, log-contact, digest or schedule) is refused before it starts unless it has `--consent-by NAME`.
+- **The gate.** Any live `--exec-mode create-next-actions` run (canonical, log-contact, digest, schedule or loop) is refused before it starts unless it has `--consent-by NAME`.
+- **The model loop is read-only otherwise.** Without consent, a `create`, `update`, `delete`, `transition`, `bulk_update` or `make_from` call from the model is refused in the harness, and a repeated attempt ends the run (added in §9).
 - **The record.** Every write-mode run writes `consent.json` with who consented, the mode, the task, the limit, the deal ids and every created record id. A dry-run says it reached no live book.
 - This stands in for `ApprovalRequest`, which this seat cannot reach.
 
@@ -261,7 +262,7 @@ These rules sit in a separate tuple, `DATA_LIMIT_RULES`, so the existing rule se
 - `--task schedule` in write mode.
 - The rationale Note (B6), which must first be checked against `_rot_days`.
 - The call-note draft (B10).
-- `AgentEscalation.create` on Keystone. It needs no assignee, unlike `escalations.raise` (G9), but has not been run on either instance.
+- `escalations.raise` from the digest. It has never been run live. On Keystone it cannot run, because no assignee is offered (report ecc2941b).
 
 **Needs a model credential (D5).** The citation check has only run on scripted answers.
 
@@ -272,7 +273,7 @@ These rules sit in a separate tuple, `DATA_LIMIT_RULES`, so the existing rule se
 | Setting | Value |
 |---|---|
 | Lead priority points | 40 / 30 / 20 / 10 |
-| Escalation rule | top 10% by value and more than 14 days past close |
+| Escalation rule | top 10% by value and more than 14 days past close; SLA 1,440 minutes |
 | Memory expiry | 45 days |
 | Write cap | 25 |
 | Digest schedule | weekdays at 09:00 |
@@ -299,7 +300,7 @@ Status in this table:
 | G2 not contacted | done for deals | deals and leads, called vs touched | A1 |
 | G3 next action | done | plus the rationale Note (opt-in) | D1, D2 |
 | G4 standing habit | open | closed (digest, schedule) | D1 to write |
-| G5 escalation | output only | `AgentEscalation` path built | D1; P9 for `raise` on Keystone |
+| G5 escalation | output only | `escalations.raise` path built, with a named assignee | D1; P9 for Keystone |
 | G6 memory | open | closed (`AgentMemory` day count) | D1 to write |
 | G7 governance | partial | consent gate and ledger | P7 |
 | G8 server-side rot filter | workaround | unchanged; the drift guard watches it | P2 |
@@ -336,3 +337,45 @@ PYTHONPATH=src .venv/bin/python -m pipeline_agent.runner --task log-contact --mo
 
 The `.env` connection points at Keystone. For Suryodaya, set `AGENTSWITCH_MCP_URL` and
 `AGENTSWITCH_MCP_TOKEN` in the environment. They are used as a pair and never mixed with `.env`.
+
+---
+
+## 9. Bug hunt on 2026-09-30 (after phase 2)
+
+The hunt looked both ways: at platform defects, which were filed, and at this repository's phase 2 code, which was fixed on this branch. The platform probes were read-only. No other team's record was written, and no escalation, draft or to-do was created.
+
+### 9.1 Platform bugs filed (5)
+
+| Ref | Instance | Report id | Severity | Summary |
+|---|---|---|---|---|
+| Bug 17 | Suryodaya | `a008b0a0` | HIGH | 45 of Team 04's escalations are listed to this CRM seat. They carry manufacturing work-order text (WO-2026-00048, WO-2026-00169) from an app this seat is refused. Their `subject`, `reason` and `resolution_note` are writable, and the governance view grants `may_update` and `may_stop_agent`. Team 10's to-dos are writable too, on both instances. It extends Bug 5 from sessions to escalations and to-dos. |
+| Bug 18 | Suryodaya | `c9bc22b7` | MEDIUM | `AgentEscalation.create` is a side door around `escalations.raise`. ESC-2026-00026 has been open since 26 September with no assignee, no SLA (`sla.notMeasurable`) and agent replies still enabled. |
+| Bug 19 | Suryodaya | `25659b66` | LOW | `/api/forecast` contract. `total_pipeline` silently leaves out the 71 undated open deals (₹30.36M). `period=year`, `week` or any string returns monthly buckets. An unknown pipeline returns an empty 200. `win_rate` is a count ratio shown beside value fields. |
+| Bug 20 | Suryodaya | `1a75533d` | LOW | `/api/{entity}/aggregate?sum=title` returns 0 instead of an error. Unknown fields are correctly refused. |
+| KS-CN-01 | Keystone | `25d07681` | LOW | `call_note_sources` offers calls that are not done, including five dated in the future, as sources for a call-note draft. The same holds on Suryodaya: 15 of 21 are not done. |
+
+The report bodies are in `EAG_V3_capstone/bugs/hunt_bugs_2026-09-30.json` and the ids in `…_filed.json`. Your filed total is now **75**: Suryodaya 41, Keystone 34.
+
+**Checked and not filed:**
+- **The aggregate.** Counts and sums match `Deal.list` exactly.
+- **Open deals missing from the forecast.** All of them have no close date, which looks intended, so it went into Bug 19 as context rather than a separate report.
+- **Currency mixing in the aggregate.** It can't be shown without writing, because the only non-USD deals are worth 0.
+
+### 9.2 Agent bugs fixed on this branch (3)
+
+| # | Bug | Effect before the fix | Fix |
+|---|---|---|---|
+| F1 | The digest escalated through `AgentEscalation.create`, the same side door as platform Bug 18 | Every digest escalation would have been open, unowned and without an SLA. The "SLA clock on the platform" in B7 was not true. | `escalations.raise` with a named assignee: `PIPELINE_ESCALATION_ASSIGNEE`, otherwise the only person offered. With none or several, nothing is raised. One session per escalation, because raising stops the agent on that session. Raise is added to the write-endpoint allow-list. |
+| F2 | The model loop could call `create`, `update` and `transition` with no consent | The claim in B9 that every live write needs consent was false for `--task loop` | The loop refuses write tools unless the run is `create-next-actions` with `--consent-by`. `loop` joins the consent-gated tasks. |
+| F3 | Two new refusal patterns were too broad | "How many days since the last call to new customers?" was refused as a stage-duration question, because it contains "new". "…where the target was met" was refused as meeting history, because of "met". | Stage names now count only after "in", "at" or "entered". "met" was dropped from the meeting pattern. |
+
+**Checks after the fixes:**
+- The existing suite still passes, 272 of 272, with no test edited.
+- The scenario script now has 77 checks, all passing. The new ones cover:
+  - escalations go through `raise`, with one session each and the assignee and SLA set;
+  - Keystone, with no assignee, raises nothing;
+  - with two candidates the agent picks nobody, and a named assignee is used when set;
+  - unreadable assignees raise nothing;
+  - the loop's write is refused without consent and allowed with it;
+  - four questions that are no longer refused, and three that still are.
+- The live Suryodaya digest still runs in propose mode.

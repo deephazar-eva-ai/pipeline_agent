@@ -146,8 +146,8 @@ class MCPClient(abc.ABC):
         raise MCPToolError(f"GET {path}", "REST reads are not supported by this client")
 
     async def call_write_endpoint(self, name: str, arguments: dict) -> Any:
-        """Call one allow-listed `endpoint.*` tool that WRITES (today only
-        `endpoint.crm.call_notes.draft`). Kept apart from `call_endpoint`,
+        """Call one allow-listed `endpoint.*` tool that WRITES (today
+        `endpoint.crm.call_notes.draft` and `...escalations.raise`). Kept apart from `call_endpoint`,
         which is read-only by contract, so a write is always a deliberate
         call site rather than a read helper used for something else."""
         raise MCPToolError(name, "write endpoints are not supported by this client")

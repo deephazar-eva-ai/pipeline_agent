@@ -10,8 +10,12 @@ list word for word. This module turns one run into a digest that remembers:
 * `AgentTodo` holds decisions only a person may make - assign an owner,
   re-quote, close a dead deal, decide an unmapped stage - and the questions
   other seats must answer (email, payments, tickets, contracts: all 403 here);
-* `AgentEscalation` hands a stale high-value deal to a person with the
-  platform's own record, on an `AgentSession` opened for the digest.
+* an escalation hands a stale high-value deal to a named person through
+  `endpoint.agent_governance.escalations.raise`, on an `AgentSession` opened
+  for it. Never through `AgentEscalation.create`: that side door produces an
+  "open" escalation with no assignee, no SLA and the agent not stopped
+  (platform Bug 18, c9bc22b7). With no assignable person (Keystone, report
+  ecc2941b) or no clear one, nothing is raised and the digest says so.
 
 Safety rules, all enforced here rather than trusted to a caller:
 
@@ -44,6 +48,12 @@ MEMORY_IMPORTANCE = 0.7
 # or when it is large (value >= the open-pipeline p90) and its close date
 # passed more than this many days ago. Template - confirm with the seat owner.
 ESCALATE_PAST_CLOSE_DAYS = 14
+ESCALATION_SLA_MINUTES = 1440
+# The person escalations go to, as an AgentEscalation assignee party id. Only
+# needed when the tenant offers more than one; the agent never picks a human.
+ASSIGNEE_ENV = "PIPELINE_ESCALATION_ASSIGNEE"
+RAISE_TOOL = "endpoint.agent_governance.escalations.raise"
+ASSIGNEES_TOOL = "endpoint.agent_governance.escalations.assignees"
 
 # Questions this seat cannot answer from its own catalogue (all 403), and the
 # seat that owns the data. From the capability plan §4.
@@ -227,11 +237,10 @@ def plan_digest(answer: CanonicalAnswer, rows: list[dict], *, today: str,
                 "already_open": key in open_esc_keys}
         if not item["already_open"]:
             item["write"] = {"entity": "AgentEscalation", "data": {
-                "subject": f"Stale deal needs an owner's decision: {title}"[:200],
-                "reason_code": "other", "channel": "api",
-                **({"party_id": row["party_id"]} if row.get("party_id") else {}),
-                "reason": f"{why}. {result.rot_evidence.get('independent_rot_days')} days "
-                          f"since genuine contact. {_key_line(key)}"}}
+                "title": f"Stale deal needs an owner's decision: {title}"[:200],
+                "reason_code": "other", "sla_minutes": ESCALATION_SLA_MINUTES,
+                "reason": f"{title}: {why}. {result.rot_evidence.get('independent_rot_days')} "
+                          f"days since genuine contact. {_key_line(key)}"}}
         digest.escalations.append(item)
     return digest
 
@@ -255,33 +264,68 @@ async def run_digest(client: MCPClient, answer: CanonicalAnswer, rows: list[dict
                 "AgentEscalation": escalations is not None}
     pending = [i for i in digest.newly_flagged + digest.todos + digest.escalations
                if "write" in i]
-    session_id: str | None = None
+    assignee: str | None = None
+    if any(i["write"]["entity"] == "AgentEscalation" for i in pending):
+        assignee, why_not = await _choose_assignee(client)
+        if assignee is None:
+            digest.notes.append(f"escalations not raised: {why_not}")
     for item in pending:
         entity, data = item["write"]["entity"], dict(item["write"]["data"])
+        key = item.get("key") or item.get("deal_id")
         if not readable[entity]:
             digest.not_written.append({"entity": entity, "reason": "dedupe read failed"})
             continue
-        if len(digest.written) >= HABIT_MAX_WRITES:
+        if entity == "AgentEscalation" and assignee is None:
+            digest.not_written.append({"entity": entity, "reason": "no assignee", "key": key})
+            continue
+        # An escalation costs two records (its session and the escalation).
+        cost = 2 if entity == "AgentEscalation" else 1
+        if len(digest.written) + cost > HABIT_MAX_WRITES:
             digest.not_written.append({"entity": entity, "reason": f"cap {HABIT_MAX_WRITES}",
-                                       "key": item.get("key") or item.get("deal_id")})
+                                       "key": key})
             continue
         try:
             if entity == "AgentEscalation":
-                if session_id is None:
-                    session = await client.create("AgentSession", {
-                        "title": f"pipeline_agent digest {today}", "channel": "api",
-                        "actor_kind": "system", "actor_label": "pipeline_agent",
-                        "metadata": f"{HABIT_MARKER} run={run_id}"})
-                    session_id = (session or {}).get("id")
-                    digest.written.append({"entity": "AgentSession", "id": session_id})
-                data["session_id"] = session_id
-            record = await client.create(entity, data)
+                # One session per escalation: raising stops the agent on its
+                # session, so a shared one would be stopped by the first.
+                session = await client.create("AgentSession", {
+                    "title": data.pop("title"), "channel": "api",
+                    "actor_kind": "system", "actor_label": "pipeline_agent",
+                    "metadata": f"{HABIT_MARKER} run={run_id} key={key}"})
+                session_id = (session or {}).get("id")
+                digest.written.append({"entity": "AgentSession", "id": session_id,
+                                       "key": key})
+                record = await client.call_write_endpoint(RAISE_TOOL, {
+                    **data, "session_id": session_id, "assignee_party_id": assignee})
+            else:
+                record = await client.create(entity, data)
             digest.written.append({"entity": entity, "id": (record or {}).get("id"),
-                                   "key": item.get("key") or item.get("deal_id")})
+                                   "key": key})
         except MCPToolError as e:
-            digest.not_written.append({"entity": entity, "reason": e.message,
-                                       "key": item.get("key") or item.get("deal_id")})
+            digest.not_written.append({"entity": entity, "reason": e.message, "key": key})
     return digest
+
+
+async def _choose_assignee(client: MCPClient) -> tuple[str | None, str]:
+    """(assignee party id, "") or (None, why). The agent does not choose
+    between people: it uses PIPELINE_ESCALATION_ASSIGNEE when that is one of
+    the offered assignees, else the only one offered, else nobody."""
+    import os
+    try:
+        res = await client.call_endpoint(ASSIGNEES_TOOL, {})
+    except (MCPToolError, NotImplementedError) as e:
+        return None, f"assignees could not be read ({e})"
+    options = [o.get("id") for o in ((res or {}).get("options") or []) if o.get("id")]
+    wanted = os.environ.get(ASSIGNEE_ENV, "").strip()
+    if wanted:
+        return ((wanted, "") if wanted in options else
+                (None, f"{ASSIGNEE_ENV}={wanted} is not an offered assignee"))
+    if len(options) == 1:
+        return options[0], ""
+    if not options:
+        return None, "no assignable person on this tenant (report ecc2941b)"
+    return None, (f"{len(options)} possible assignees - set {ASSIGNEE_ENV} to the one "
+                  f"escalations should go to")
 
 
 # --- the schedule -------------------------------------------------------------

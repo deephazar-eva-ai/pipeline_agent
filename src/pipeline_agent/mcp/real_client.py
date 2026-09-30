@@ -62,7 +62,8 @@ def _normalise_result(tool: str, result: Any) -> Any:
 # write through. Allow-lists, not patterns: widening either is a code change
 # someone has to review.
 REST_READ_PATHS = frozenset({"/api/forecast", "/api/deal-rot-config"})
-WRITE_ENDPOINTS = frozenset({"endpoint.crm.call_notes.draft"})
+WRITE_ENDPOINTS = frozenset({"endpoint.crm.call_notes.draft",
+                             "endpoint.agent_governance.escalations.raise"})
 
 
 class RealMCPClient(MCPClient):

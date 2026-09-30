@@ -2,9 +2,9 @@
     "exported_at": "2026-09-30",
     "source": "GET /api/bug-report/mine",
     "counts": {
-        "suryodaya": 37,
-        "keystone": 33,
-        "total": 70
+        "suryodaya": 41,
+        "keystone": 34,
+        "total": 75
     },
     "data": [
         {
@@ -501,6 +501,21 @@
             "issue_number": null,
             "issue_url": "",
             "created_at": "2026-09-29T06:47:28.280813"
+        },
+        {
+            "instance": "keystone",
+            "instance_url": "https://class.agentswitch.theschoolofai.in",
+            "id": "25d07681-b1f4-4f0c-9c50-068837116a9c",
+            "description": "Keystone: the call-note source list offers calls that have not happened yet, including future-dated ones (LOW)\n\n[Keystone, class.agentswitch.theschoolofai.in] LOW. Found 2026-09-30 by team07 (Seat 07 Pipeline, user 443778c5) with a read-only probe: GET/MCP reads only, no draft created.\n\n`endpoint.crm.call_note_sources` (GET /api/crm/call-note-sources) lists the call Activities a call note may be drafted from (`endpoint.crm.call_notes.draft` takes an `activity_id`). It returns all 86 call activities, including **9 that are not done**, **5 of them dated in the future**, e.g.:\n- 16722288 due 2026-10-09 \"Quality follow-up — Heather Kuiper (Oct 2026)\"\n- 3373f6a1 due 2026-10-10 \"Quality follow-up — Greg Halvorsen (Oct 2026)\"\n- 59cba849 due 2026-10-10 \"Quality follow-up — Nina Albright (Oct 2026)\"\n\nA call note records what was said on a call; offering a call that has not taken place as its source invites an AI-drafted note of a conversation that never happened. Suryodaya shows the same: 21 sources, 15 not done, 1 future-dated (a810ecfd, 2026-11-06 \"Satara despatch, week 5\").\n\nExpected: sources limited to completed calls (`done` true, due_date not in the future), or the draft endpoint refuses a not-done activity. (Whether draft itself refuses was not tested - that would create a record.)",
+            "page": "CRM:Call notes",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T08:52:16.269777"
         },
         {
             "instance": "suryodaya",
@@ -1056,6 +1071,66 @@
             "issue_number": null,
             "issue_url": "",
             "created_at": "2026-09-30T06:37:46.000756"
+        },
+        {
+            "instance": "suryodaya",
+            "instance_url": "https://agentswitch.theschoolofai.in",
+            "id": "a008b0a0-8dfc-40a4-a920-c4e2ff6cda4d",
+            "description": "Bug 17 — Another team's escalations are listed to the CRM seat, with manufacturing work-order content, and their text fields are writable (HIGH)\n\nTenant: Suryodaya Precision Works Pvt. Ltd. (company_id 5cbe5a55-af74-4363-a436-f5350593114c). Found 2026-09-30 by team07 (Seat 07 Pipeline, role sales_user, user b0f54dbe) with a read-only probe: MCP list/get and GET only, nothing written.\n\n`AgentEscalation.list` from seat 07 (app `crm`) returns 46 escalations. 45 were raised by **Team 04** (raised_by 1094a446, `raised_by_display: \"Team 04\"`), all from the manufacturing seat, e.g.:\n- ESC `e5eb4917` subject \"team04-harness task escalate_blocked_wo48\", reason \"[WO-2026-00048] Work order WO-2026-00048 is late and stopped, blocked by draft s…\", assignee Meera Kulkarni.\n- ESC `bec7863e` \"[WO-2026-00169] WO-2026-00169 was modified underneath during the reschedule run…\".\n\nWork-order data belongs to the manufacturing app, which this seat is refused on every entity route (the documented cross-app 403). Here it arrives inside another app's record.\n\nEvery one of these rows is returned with `_permissions.write: true`. Their `_readonly_fields` protect status, assignee, SLA and resolution timestamps, but **not** `subject`, `reason`, `reason_code`, `resolution_note`, `party_id`, `session_id` or `channel` - so a CRM seat may rewrite what the assigned human reads first on another team's escalation. `endpoint.agent_governance.escalations` agrees: `capabilities: may_update true, may_stop_agent true` for an actor whose rows are all `mine: false`. (Not exercised - no other team's record was written.)\n\nSame pattern, smaller: `AgentTodo.list` returns Team 10's \"[team10-probe] W9 todo probe\" rows (created_by 2e52117a on Suryodaya; 5f20d322 on Keystone, TODO-2026-00001), each `write: true`.\n\nExpected: an agent-workspace record (escalation, to-do) is visible and writable only to the team/seat that raised it and to its assignee; cross-app content is not exposed through it. Related: Bug 5 (323166db) - the same defect on AgentSession; this report is escalations and to-dos, including cross-app content.",
+            "page": "CRM:Agent governance",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T08:52:10.935160"
+        },
+        {
+            "instance": "suryodaya",
+            "instance_url": "https://agentswitch.theschoolofai.in",
+            "id": "c9bc22b7-b80a-4d58-b1a7-23b9b7af2d51",
+            "description": "Bug 18 — `AgentEscalation.create` bypasses `escalations.raise`: the escalation is open with no owner, no SLA, and the agent is not stopped (MEDIUM)\n\nTenant: Suryodaya Precision Works Pvt. Ltd. (company_id 5cbe5a55-af74-4363-a436-f5350593114c). Found 2026-09-30 by team07 (Seat 07 Pipeline, role sales_user, user b0f54dbe) with a read-only probe: MCP list/get and GET only, nothing written.\n\n`endpoint.agent_governance.escalations.raise` requires `session_id`, `assignee_party_id` and `reason`, snaps `sla_minutes` to a window, and stops the agent on the conversation. But `AgentEscalation.create` is in the seat catalogue too, requiring only `session_id` and `reason`, and produces a record the governance view treats as a real open escalation.\n\nLive example: **ESC-2026-00026** (`fb2c2be7`, created 2026-09-26 11:58 by 502a4543), \"BOM quote for 500x dd873bd7…\", as returned today by `endpoint.agent_governance.escalations` (view `open`, counts open 1 / closed 45):\n- `status: open`, `assignee_user_id / assignee_party_id / assignee_display: null`\n- `raised_at: null`, `raised_by_display: null`, `sla_minutes: null`, `due_at: null`\n- `sla.code: \"sla.notMeasurable\"`, `breached: null`\n- conversation `34e24c26` still `status: active`, `agent_replies_enabled: true`\n\nSo it has been \"open\" for four days with nobody to act on it and no clock that can breach, while the agent it was meant to stop can still reply. An assignee exists on this tenant (`escalations.assignees` returns Meera Kulkarni).\n\nExpected: either `AgentEscalation.create` is not offered (raise is the only way in), or create applies the same rules as raise (assignee required, SLA set, agent stopped).",
+            "page": "CRM:Agent governance",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T08:52:11.485846"
+        },
+        {
+            "instance": "suryodaya",
+            "instance_url": "https://agentswitch.theschoolofai.in",
+            "id": "25659b66-5375-4754-967b-e99bd57847ea",
+            "description": "Bug 19 — `/api/forecast` contract: total_pipeline silently drops undated deals, unsupported `period` values fall back to monthly, an unknown pipeline returns an empty success (LOW)\n\nTenant: Suryodaya Precision Works Pvt. Ltd. (company_id 5cbe5a55-af74-4363-a436-f5350593114c). Found 2026-09-30 by team07 (Seat 07 Pipeline, role sales_user, user b0f54dbe) with a read-only probe: MCP list/get and GET only, nothing written.\n\n1. **`summary.total_pipeline` is not the open pipeline.** It is ₹106,249,734.14 over 19 deals. The book has 90 open deals worth ₹136,606,915.97; the 71 missing ones (₹30,357,181.83) are exactly the open deals with no `expected_close_date`. Nothing in the response says they were left out. Same on Keystone (27 of 28 open deals; the 28th has value 0).\n2. **`period` accepts anything.** `month` and `quarter` give different buckets; `year`, `week` and `bogus` all return HTTP 200 with the monthly buckets. The OpenAPI schema declares `period` as a free string (default `month`) with no enum, so a caller asking for yearly figures gets monthly ones with no error. Same on Keystone.\n3. **Unknown `pipeline` is a success.** `pipeline=no_such_pipeline` returns 200 with zero buckets, indistinguishable from a real pipeline with no dated deals (e.g. `distributor_enquiries_maintenance`).\n4. **`summary.win_rate` is by count** (23 won / 53 closed = 43.4%) although it sits beside `won_value` and `lost_value`, which give 57.9% by value (Keystone: 37.3% vs 64.9%). The field does not say which.\n\nExpected: undated open deals counted or reported (`undated_count`, `undated_value`); `period` validated (422 on unsupported values, per the declared 422 response); unknown pipeline -> 404/422; `win_rate` basis named. Related: Bug 16 (c7c827ed), probability 0 weighted at 50% in the same endpoint.",
+            "page": "CRM:Forecast",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T08:52:15.151965"
+        },
+        {
+            "instance": "suryodaya",
+            "instance_url": "https://agentswitch.theschoolofai.in",
+            "id": "1a75533d-3b87-4555-b1da-bceb1998e790",
+            "description": "Bug 20 — `/api/{entity}/aggregate?sum=` on a text field returns 0 instead of an error (LOW)\n\nTenant: Suryodaya Precision Works Pvt. Ltd. (company_id 5cbe5a55-af74-4363-a436-f5350593114c). Found 2026-09-30 by team07 (Seat 07 Pipeline, role sales_user, user b0f54dbe) with a read-only probe: MCP list/get and GET only, nothing written.\n\n`GET /api/Deal/aggregate?group_by=stage&sum=value` is correct - counts and sums match `Deal.list` exactly for all six stages (143 deals, ₹244,171,446.61).\n\nBut `sum=title` (a text field) returns HTTP 200 with `\"sum\": 0.0` in every bucket, while `sum=bogus` correctly returns 400 \"Cannot sum Deal.'bogus' — no such field\" and `group_by=nonexistent_field` returns 400. A report built on the wrong field name therefore shows zero revenue rather than failing.\n\nExpected: 400/422 \"Cannot sum Deal.title — not a numeric field\", as for an unknown field.",
+            "page": "CRM:Reports",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T08:52:15.697737"
         }
     ]
 }

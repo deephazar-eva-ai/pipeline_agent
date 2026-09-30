@@ -115,7 +115,7 @@ class ScheduleResult:
 
 
 # Tasks that can write to the shared book in create-next-actions mode.
-WRITE_TASKS = ("canonical", "log-contact", "digest", "schedule")
+WRITE_TASKS = ("canonical", "log-contact", "digest", "schedule", "loop")
 
 
 async def log_contact(client: Any, args: argparse.Namespace, *, run_id: str) -> Any:
@@ -441,7 +441,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 # run_loop records its own steps and returns its own TaskRun;
                 # handing it the recorder would log every call twice.
                 run = await run_loop(task, client, llm, settings.model_name,
-                                      max_steps=args.max_steps)
+                                      max_steps=args.max_steps, allow_writes=writes)
             elif args.task == "schedule":
                 recorder = RecordingMCPClient(client, run.steps)
                 _, tz_name, _ = await load_company_clock(

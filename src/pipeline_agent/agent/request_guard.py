@@ -96,7 +96,8 @@ RULES: tuple[GuardRule, ...] = (
 DATA_LIMIT_RULES: tuple[GuardRule, ...] = (
     GuardRule(
         "stage_duration",
-        _rx(r"\b(how long|how many days|since when)\b.*\b(stage|new|qualification|proposal|"
+        _rx(r"\b(how long|how many days|since when)\b.*\b(in|at|entered)\s+"
+            r"(the |its |their |this |that |each |current |a )*(stage|qualification|proposal|"
             r"negotiation)\b",
             r"\b(time|days|weeks) (spent )?in (the |its |their |each |current )*stage\b"),
         ("Deal",),
@@ -106,7 +107,8 @@ DATA_LIMIT_RULES: tuple[GuardRule, ...] = (
         "reports that bound in each row's rot_score - but it is a bound, not an answer."),
     GuardRule(
         "email_meeting_recency",
-        _rx(r"\b(last|latest|recent|most recent)\b.*\b(e-?mail(ed)?|meeting|met|calendar)\b",
+        _rx(r"\b(last|latest|recent|most recent)\b.*\b(e-?mails?|e-?mailed|meetings?|"
+            r"calendar)\b",
             r"\bwhen did we (e-?mail|meet)\b"),
         ("EmailMessage", "CalendarEvent"),
         "Cannot answer email or meeting history: EmailMessage and CalendarEvent are in the "

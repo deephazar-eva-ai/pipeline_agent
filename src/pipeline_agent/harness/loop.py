@@ -86,9 +86,15 @@ MAX_REPEAT_DENIALS = 1
 
 LLMCallable = Callable[[str, str], Awaitable[str]]
 
+# Generic tools that change the book. The loop refuses them unless the run was
+# started as a write run with consent (crm_gap_fillup.md B9): the model picks
+# its own calls here, so this is the only place a write can be stopped.
+WRITE_TOOLS = frozenset({"create", "update", "delete", "transition", "bulk_update",
+                         "make_from"})
+
 
 async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
-                    *, max_steps: int = 12) -> TaskRun:
+                    *, max_steps: int = 12, allow_writes: bool = False) -> TaskRun:
     run = TaskRun(task_id=task["id"], model=model)
     t0 = time.time()
     history: list[str] = []
@@ -132,6 +138,14 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                 run.ended = "refused"
                 break
 
+            if tool in WRITE_TOOLS and not allow_writes:
+                denials[key] = denials.get(key, 0) + 1
+                run.steps.append(Step("refused", tool, entity, False,
+                                      "write tools are disabled for this run", arguments=arguments))
+                history.append(f"REFUSED {tool}({entity}): this run is read-only (no "
+                               f"--exec-mode create-next-actions with consent). Do not retry; "
+                               f"propose the change in your answer instead.")
+                continue
             try:
                 result = await client.call_tool(tool, arguments)
                 run.steps.append(Step("tool_call", tool, entity, True, arguments=arguments))
