@@ -219,8 +219,8 @@ These rules sit in a separate tuple, `DATA_LIMIT_RULES`, so the existing rule se
 | Cost of a canonical run | 15 tool calls, about 33 s | 15 tool calls, about 60 s |
 
 **Platform findings from these runs:**
-- **The forecast treats probability 0 as 50%.** On Suryodaya, three deals whose record says 0% are weighted at exactly 50% in `/api/forecast`. The capability plan had inferred this from two buckets; this run shows it on three named deals. The next step is to file it, together with Bug 11.
-- **Suryodaya's forecast leaves out 56 open deals**, most of which have no expected close date.
+- **The forecast treats probability 0 as 50%.** On Suryodaya, three deals whose record says 0% are weighted at exactly 50% in `/api/forecast`; the other 16 deals are weighted at their own probability. **Filed 2026-09-30 as Bug 16, report id `c7c827ed-b0b0-4990-81b3-ed0a39c36a50`**, and cross-referenced to Bug 11. The report body is in `EAG_V3_capstone/bugs/pipeline_bugs_2026-09-30.json`. It does not reproduce on Keystone, whose forecast has no deal at 0%.
+- **Suryodaya's forecast leaves out open deals with no expected close date.** All 71 missing open deals have none, which looks intended, so this was not filed.
 - **The Suryodaya digest would propose 107 to-dos.** The write cap of 25 means a first write run on Suryodaya would leave most of them listed as "not written (cap)". Consent for that run should say which to-dos matter.
 
 ---

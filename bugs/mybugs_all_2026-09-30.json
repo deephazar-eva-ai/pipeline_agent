@@ -2,9 +2,9 @@
     "exported_at": "2026-09-30",
     "source": "GET /api/bug-report/mine",
     "counts": {
-        "suryodaya": 36,
+        "suryodaya": 37,
         "keystone": 33,
-        "total": 69
+        "total": 70
     },
     "data": [
         {
@@ -1041,6 +1041,21 @@
             "issue_number": null,
             "issue_url": "",
             "created_at": "2026-09-25T05:21:48.890938"
+        },
+        {
+            "instance": "suryodaya",
+            "instance_url": "https://agentswitch.theschoolofai.in",
+            "id": "c7c827ed-b0b0-4990-81b3-ed0a39c36a50",
+            "description": "Bug 16 — `/api/forecast` weights a deal with probability 0 at 50% (MEDIUM)\n\nTenant: Suryodaya Precision Works Pvt. Ltd. (company_id 5cbe5a55-af74-4363-a436-f5350593114c). Found 2026-09-30 by team07 (Seat 07 Pipeline) with a read-only probe: GET /api/forecast and MCP Deal.list only, nothing written.\n\n`GET /api/forecast` returns, per deal, `probability` and `weighted`. For every deal whose probability is above 0, `weighted = value × probability / 100` (16 of 19 deals match exactly, e.g. 12% → 12%). For the three deals whose probability is 0, `weighted` is exactly half the value:\n\n| Deal | Period | Stage | probability (forecast row and Deal record) | value | weighted | implied |\n|---|---|---|---|---|---|---|\n| 6be7e3b1-664a-4a56-aa6a-1c380cee052b Follow-up — Krishna Auto Components Engineering Works | 2025-09 | new | 0.0 | 451,902.60 | 225,951.30 | 50% |\n| 2aad747c-8b23-4d12-9bb8-9e907ab9bc54 Complaint — Suvarna Sheet Metal Industries | 2026-05 | new | 0.0 | 14,054.30 | 7,027.15 | 50% |\n| af674bec-acb8-478d-93f4-f1ba9a7ea1e9 V-Block Pair — annual review | 2026-06 | new | 0.0 | 714,555.80 | 357,277.90 | 50% |\n\nExpected: a deal at 0% contributes 0 to the weighted forecast (or, if 0 is meant as \"not set\", the response says so and uses a documented default such as the stage's probability - `new` is not 50% anywhere else).\nActual: 0 is silently replaced by 50%. The response still reports `probability: 0.0` next to a 50% weighting, so the two fields in the same row contradict each other.\n\nImpact: the forecast overstates open weighted value by ₹590,256 across these three rows, and a caller cannot tell \"zero\" from \"unset\". Related to Bug 11 (2ff27d2b, probability not tied to stage), which makes 0% common on deals where it is wrong; this report is about the forecast's own arithmetic, which is wrong even where 0 is right.\n\nNot reproducible on Keystone today: its forecast has no deal at probability 0 with a non-zero value.\nNote (context, not a separate bug): open deals with no expected_close_date are absent from the forecast (71 of 71 missing open deals have none), which looks intended.",
+            "page": "CRM:Forecast",
+            "agent_seat": "Pipeline",
+            "job_id": "",
+            "status": "new",
+            "resolution_note": null,
+            "delivery": "local",
+            "issue_number": null,
+            "issue_url": "",
+            "created_at": "2026-09-30T06:37:46.000756"
         }
     ]
 }
