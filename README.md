@@ -14,7 +14,73 @@ Canonical task this agent answers:
 See project scope and gap analysis (kept outside this repo, in the capstone docs tree)
 for the full context this agent is built against.
 
+## Harness
+
+The harness runs the agent against the live AgentSwitch platform over MCP. It records
+every tool call and writes the run to disk before anything is scored. The scored
+verifiers then check outcomes against the platform's own data, not against what the
+agent says it did.
+
+### What it is made of
+
+| Piece | Where | What it does |
+|---|---|---|
+| MCP client | `src/pipeline_agent/mcp/` | Live JSON-RPC 2.0 client for `POST /api/mcp` (standard library only), and an in-memory stub for offline runs |
+| Preflight | `src/pipeline_agent/preflight.py` | Read-only probe of what the seat can actually do: the tool catalogue it exposes, whether each entity is readable, and drift against `catalogue_baseline.json` |
+| Deterministic workflow | `src/pipeline_agent/agent/workflow.py` | The canonical task: rot, contact status and next action, computed in plain Python |
+| Model-driven loop | `src/pipeline_agent/harness/loop.py` | "Our own loop": the model picks each tool call. A second denied call to the same tool/entity force-stops the run, so a model cannot retry past a refusal |
+| Recorder | `src/pipeline_agent/harness/recording.py` | Captures every tool call into the run trace |
+| Run artifacts | `src/pipeline_agent/harness/artifacts.py` | Writes `runs/<timestamp>__<task>__<id>/` with `input.json`, `config.json` (secrets redacted), `result.json` and `status.json`. `status.json` flips to `completed` only after `result.json` is fully written |
+| Scored tasks | `tasks/` | Human-authored tasks and verifiers that check the platform directly |
+
+### Running it
+
+```bash
+# 1. What can this credential do? Read-only; run it first.
+PYTHONPATH=src python3 -m pipeline_agent.runner --task preflight --mode live
+
+# 2. The canonical task (read-only propose mode by default).
+PYTHONPATH=src python3 -m pipeline_agent.runner --task canonical --mode live
+
+# 3. The scored refusal task: checks env and platform, then runs run + verify.
+export AGENTSWITCH_BASE_URL=https://agentswitch.theschoolofai.in
+export AGENTSWITCH_TOKEN=<token from POST /api/auth/login>
+tasks/run_refusal_task.sh
+```
+
+`--mode live` reads `AGENTSWITCH_MCP_URL` and `AGENTSWITCH_MCP_TOKEN` from `.env`. In
+the scored task, `verify` recomputes the verdict from the run's artifacts and does not
+use the process exit code. Its exit codes are 0 pass, 1 fail and 3 blocked.
+`run_refusal_task.sh` adds two more: 4 when the environment is not set up, and 5 when
+the platform's LLM provider is down.
+
+### Scored task matrix
+
+The cases come from `tasks/README.md`. Tasks and verifiers are written by hand by the
+team; the rubric scores AI-written tests at zero.
+
+| Case | Verifier asserts | Status |
+|---|---|---|
+| Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). A2–A4 pass; A1 is blocked by the platform's own LLM provider returning `401` (`can_configure: false`), re-checked 2026-10-03 |
+| Rotting deal | Correct inclusion/exclusion and reported evidence | Not started |
+| No recent contact | Correct contact classification, with date and channel evidence | Not started |
+| Existing next action | No duplicate activity; result links the existing one | Not started |
+| Missing next action | Exactly one correct activity exists after the run | Not started |
+| Concurrent change | Agent re-reads; no stale or duplicate write | Not started |
+| Ambiguous or bad stage data | No unsafe invented action; flagged for review | Not started |
+
+### Offline regression suite
+
+`tests/` holds 272 offline regression tests (`.venv/bin/pytest tests -q`). They cover the
+workflow, guards, preflight, transport, artifacts and Keystone-specific contracts. They
+protect the code; they are **not** the scored verifiers, because they cannot prove a
+postcondition on the live platform.
+
 ## Status
+
+Latest measured status (2026-10-03, both tenants):
+[`docs/pipeline_agent_summary.md`](docs/pipeline_agent_summary.md). The notes below
+are the 2026-09-22 milestones.
 
 As of 2026-09-22 the agent answers the canonical question against the **live**
 Suryodaya book: 81 rotting deals out of 133, with contact status and a next
@@ -63,8 +129,8 @@ src/pipeline_agent/
   preflight.py                 read-only probe: tool catalogue + entity access
   llm.py                        model backends for the loop (anthropic | ollama)
   runner.py                    CLI entry point (Phase 4)
-tasks/          human-authored task matrix goes here (schema only, so far)
-tests/          human-authored verifiers go here (empty on purpose - see tests/README.md)
+tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
+tests/          offline regression suite, 272 tests - not the scored verifiers (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md
 runs/           run artifacts land here, gitignored except .gitkeep
 ```
