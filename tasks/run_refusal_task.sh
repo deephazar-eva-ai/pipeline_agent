@@ -8,14 +8,14 @@
 #     -d '{"email":"<team email>","password":"<team password>"}' \
 #     | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
 #
-#   src/pipeline_agent/tasks/run_refusal_task.sh [artifacts_dir]
+#   tasks/run_refusal_task.sh [artifacts_dir]
 #
 # Exit code is the verify exit code: 0 pass, 1 fail, 3 blocked/missing.
 # Exits 4 if the environment is not set up.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "$here/.." && pwd)"
 task="$here/mandatory_refusal_task.py"
 
 usage() {
