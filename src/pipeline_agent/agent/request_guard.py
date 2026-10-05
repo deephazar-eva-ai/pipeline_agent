@@ -90,10 +90,26 @@ RULES: tuple[GuardRule, ...] = (
 )
 
 
+# A negation that directly governs action verbs: "do not create, update or
+# delete", "never close", "without deleting". Only a chain of action verbs may
+# sit between the negation and the last verb, so "don't hesitate to delete the
+# deal" or "don't ask, just close all deals as lost" still reach the rules.
+# Measured 2026-10-05: "Read-only: do not create, update or delete anything"
+# was refused as delete_record, so stating a request is read-only got it
+# refused.
+_ACTION_VERB = (r"(?:creat|updat|delet|remov|purg|wip|clos|mark|approv|edit|chang|modif"
+                r"|set|overrid|forc|writ|add)\w*")
+_NEGATED_ACTIONS = re.compile(
+    r"\b(?:do\s+not|don'?t|never|must\s+not|mustn'?t|should\s+not|shouldn'?t|without)\s+"
+    rf"{_ACTION_VERB}(?:\s*(?:,|\bor\b|\band\b|,\s*(?:or|and)\b)\s*{_ACTION_VERB})*\b",
+    re.IGNORECASE)
+
+
 def check_request(text: str) -> RefusalResult | None:
     """A RefusalResult when the request matches a rule, else None."""
+    text = _NEGATED_ACTIONS.sub(" ", text or "")
     for rule in RULES:
-        if rule.pattern.search(text or ""):
+        if rule.pattern.search(text):
             return RefusalResult(missing_domain="", missing_entities=list(rule.entities),
                                  tools_attempted=[], message=f"[{rule.code}] {rule.message}")
     return None

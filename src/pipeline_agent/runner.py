@@ -74,7 +74,12 @@ def _load_dotenv(path: str = ".env") -> None:
         key = key.strip()
         if key in _CONNECTION_KEYS and connection_from_env:
             continue
-        os.environ.setdefault(key, value.strip())
+        value = value.strip()
+        # KEY="value" is ordinary .env syntax; passing the quotes through made
+        # a quoted ANTHROPIC_API_KEY fail to authenticate (2026-10-05).
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
 
 
 PREFLIGHT_REQUEST = ("Preflight: enumerate this credential's tool catalogue and probe "

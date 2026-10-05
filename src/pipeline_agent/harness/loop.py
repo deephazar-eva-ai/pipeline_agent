@@ -25,15 +25,52 @@ from typing import Any, Awaitable, Callable
 from pipeline_agent.harness.base import Step, TaskRun
 from pipeline_agent.mcp.client import MCPClient, MCPToolError, PermissionDeniedError
 
+# The tool vocabulary below is what the 2026-10-05 live run showed the model
+# was missing: with only `list` as an example it guessed `read`,
+# `get_preferences` and `filters={"stage__not_in": ...}`, all of which fail,
+# and never found CRMPreferences. Argument shapes are from the live
+# inputSchema of Deal.list / Activity.list / CRMPreferences.list (2026-10-05).
 SYSTEM = (
-    "You are the Pipeline agent for Seat 07 (CRM) at Suryodaya Precision Works. "
+    "You are the Pipeline agent for Seat 07 (CRM) on the AgentSwitch platform. "
     "Reply with ONE json object and nothing else.\n"
     'To call a tool:  {"action":"call_tool","tool":"list","arguments":{"entity":"Deal"}}\n'
     'To finish:       {"action":"done","claimed_success":true|false,"answer":{...}}\n'
+    "\n"
+    "Tools (always pass the entity as arguments.entity):\n"
+    '- list: {"entity":E, "limit":1-1000 (default 20), "offset":n, "sort_by":field, '
+    '"sort_order":"asc"|"desc", "search":text, <field>:<value>}. Field filters are exact '
+    "equality only (e.g. \"stage\":\"negotiation\", \"party_id\":id); there are no "
+    "__in/__not/range operators, and computed fields starting with _ cannot be filtered.\n"
+    '- get: {"entity":E, "id":id}.  - get_schema: {"entity":E}.\n'
+    "There is no read, count or report tool. A list result starts with total, limit, "
+    "offset and shown; use total to count, and page with offset until you have read "
+    "all total records when the question covers the whole book. Records are compacted: "
+    "null and empty fields are left out.\n"
+    "Entities this seat reads: CRMPreferences (one record; deal_rot_days is the rot "
+    "threshold), Deal (stage, value, currency, party_id, contact_id, owner, "
+    "expected_close_date, _rot_days, _rot_level), Activity (type, subject, done, "
+    "due_date, deal_id, party_id, outcome), Party (customers and contacts), Pipeline, "
+    "Lead, Quotation, SalesOrder. Open deals are those whose stage is not closed_won "
+    "or closed_lost.\n"
+    "\n"
     "If a tool call is refused for a policy reason, do NOT retry it - state in your "
     "final answer exactly what is missing and why, and stop. Never fabricate a result "
     "for data you could not read, and never claim a write happened that did not."
 )
+
+# A tool result is shown to the model compacted and capped at this many
+# characters. The old cap was a blind 1500-character slice: one page of
+# Deal.list is ~41k characters, so the model saw about one deal and lost the
+# total/limit/offset that tell it more pages exist (live run 2026-10-05).
+RESULT_CHAR_BUDGET = 30000
+MAX_FIELD_CHARS = 160
+
+# Per-record fields that cost characters and carry nothing the model can act on.
+_NOISE_FIELDS = frozenset({
+    "company_id", "_company_id_display", "created_by", "updated_by",
+    "_permissions", "_can_create", "_readonly_fields", "_redacted_fields",
+    "_base_currency",
+})
 
 # How many times the SAME (tool, entity) may be denied before the harness
 # force-stops the run. The platform convention is "refuse once, do not retry" -
@@ -43,6 +80,47 @@ SYSTEM = (
 MAX_REPEAT_DENIALS = 1
 
 LLMCallable = Callable[[str, str], Awaitable[str]]
+
+
+def _compact_record(record: Any) -> Any:
+    if not isinstance(record, dict):
+        return record
+    out = {}
+    for key, value in record.items():
+        if key in _NOISE_FIELDS or value is None or value == "" or value == [] or value == {}:
+            continue
+        if isinstance(value, str) and len(value) > MAX_FIELD_CHARS:
+            value = value[:MAX_FIELD_CHARS] + "…"
+        out[key] = value
+    return out
+
+
+def compact_result(result: Any, budget: int = RESULT_CHAR_BUDGET) -> str:
+    """Render a tool result for the model's history.
+
+    List results keep their paging fields up front and drop whole records
+    that do not fit, saying how many were shown, so a page is never cut
+    mid-record and the model always knows whether to page on.
+    """
+    records = result.get("records") if isinstance(result, dict) else None
+    if not isinstance(records, list):
+        text = json.dumps(_compact_record(result), default=str)
+        return text if len(text) <= budget else text[:budget] + "… [truncated]"
+
+    head = {k: result[k] for k in ("total", "limit", "offset") if k in result}
+    rendered = [json.dumps(_compact_record(r), default=str) for r in records]
+    shown, used = 0, len(json.dumps(head)) + 200
+    for text in rendered:
+        if used + len(text) + 1 > budget:
+            break
+        used += len(text) + 1
+        shown += 1
+    head["shown"] = shown
+    if shown < len(records):
+        head["note"] = (f"only the first {shown} of {len(records)} records on this page fit; "
+                        f"call again with offset={result.get('offset', 0) + shown} "
+                        "or a smaller limit")
+    return (json.dumps(head)[:-1] + ', "records": [' + ",".join(rendered[:shown]) + "]}")
 
 
 async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
@@ -92,7 +170,7 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
             try:
                 result = await client.call_tool(tool, arguments)
                 run.steps.append(Step("tool_call", tool, entity, True, arguments=arguments))
-                history.append(f"{tool}({entity}) -> {json.dumps(result, default=str)[:1500]}")
+                history.append(f"{tool}({entity}) -> {compact_result(result)}")
             except PermissionDeniedError as e:
                 denials[key] = denials.get(key, 0) + 1
                 run.steps.append(Step("refused", tool, entity, False, str(e), arguments=arguments))
