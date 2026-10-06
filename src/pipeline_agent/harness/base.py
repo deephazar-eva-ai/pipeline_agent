@@ -42,6 +42,9 @@ class TaskRun:
     calls: int = 0
     unusable_replies: int = 0
     error: str = ""
+    # Summed over model calls, when the backend reports usage (anthropic does).
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     # done | refused | error | max_steps - see loop.py. Kept distinct from
     # `error` for the same reason S18Code kept it distinct: a run that refused
@@ -49,4 +52,8 @@ class TaskRun:
     ended: str = ""
 
     created_record_ids: list[str] = field(default_factory=list)
+    updated_record_ids: list[str] = field(default_factory=list)
+    # What the harness itself read or decided outside the model's steps
+    # (e.g. the company clock that sets "today" for the model).
+    context_notes: list[str] = field(default_factory=list)
     final_answer: Any = None

@@ -30,7 +30,7 @@ from pipeline_agent.mcp.client import MCPToolError
 from pipeline_agent.config import Settings
 from pipeline_agent.harness.artifacts import run_artifact
 from pipeline_agent.harness.base import TaskRun
-from pipeline_agent.harness.loop import run_loop
+from pipeline_agent.harness.loop import WritePolicy, run_loop
 from pipeline_agent.harness.recording import RecordingMCPClient
 from pipeline_agent.llm import LLMConfigError, build_llm
 from pipeline_agent.mcp.real_client import RealMCPClient
@@ -267,8 +267,13 @@ async def main_async(args: argparse.Namespace) -> int:
             elif args.task == "loop":
                 # run_loop records its own steps and returns its own TaskRun;
                 # handing it the recorder would log every call twice.
+                policy = WritePolicy(entities=frozenset(args.allow_write),
+                                     deal_ids=frozenset(args.deal_id),
+                                     record_ids=frozenset(args.update_id),
+                                     max_writes=args.max_writes if args.allow_write else 0,
+                                     run_id=run_id)
                 run = await run_loop(task, client, llm, settings.model_name,
-                                      max_steps=args.max_steps)
+                                      max_steps=args.max_steps, write_policy=policy)
             elif args.task == "preflight":
                 result = await run_preflight(RecordingMCPClient(client, run.steps),
                                               configured_surface=settings.mcp_tool_surface)
@@ -288,7 +293,9 @@ async def main_async(args: argparse.Namespace) -> int:
         if result is None:
             # The loop reports itself: what it claimed, and how it stopped.
             print(f"loop ended: {run.ended} after {run.calls} model call(s), "
-                  f"claimed_success={run.claimed_success}")
+                  f"claimed_success={run.claimed_success}, tokens in/out "
+                  f"{run.input_tokens}/{run.output_tokens}, created={run.created_record_ids}, "
+                  f"updated={run.updated_record_ids}")
             if run.error:
                 print(f"error: {run.error}")
         else:
@@ -327,6 +334,13 @@ def main() -> int:
                          help="restrict the run to this deal id (repeatable). The precise "
                               "instrument for a targeted write; matches setup.deal_ids in "
                               "tasks/task_schema.json.")
+    parser.add_argument("--allow-write", action="append", default=[], metavar="ENTITY",
+                         help="loop: let the model create/update this entity (repeatable). "
+                              "Without it the loop is read-only, enforced by the harness.")
+    parser.add_argument("--max-writes", type=_non_negative_int, default=3,
+                         help="loop: total writes allowed when --allow-write is given.")
+    parser.add_argument("--update-id", action="append", default=[],
+                         help="loop: the only record ids the model may update (repeatable).")
     parser.add_argument("--request", default=CANONICAL_REQUEST)
     args = parser.parse_args()
     return asyncio.run(main_async(args))

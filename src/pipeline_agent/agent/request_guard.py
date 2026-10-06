@@ -60,7 +60,9 @@ RULES: tuple[GuardRule, ...] = (
         "so any percentage would be wrong. I can list won deal value per rep instead."),
     GuardRule(
         "invoice_payment",
-        _rx(r"\b(invoice|invoiced|paid|payment|receivable|overdue payment)\b"),
+        # Plurals and "unpaid" added 2026-10-06: "unpaid invoices" matched
+        # nothing, and only the platform's catalogue refusal stopped it.
+        _rx(r"\b(invoices?|invoiced|un ?paid|paid|payments?|receivables?|overdue payments?)\b"),
         ("Invoice",),
         "Cannot answer invoice or payment questions: Invoice is in the accounting app, "
         "which is not in this seat's catalogue. Ask the AR / accounting seat or a finance "

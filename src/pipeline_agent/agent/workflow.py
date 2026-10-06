@@ -852,6 +852,15 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
         reasons.append("propose-only mode - recommendation is not written")
         return ActionStatus.RECOMMENDED, proposed, reasons
 
+    pause = os.environ.get("PIPELINE_PAUSE_BEFORE_WRITE_SECONDS", "").strip()
+    if pause:
+        # Test hook for the concurrent-change job (plan item P5): hold the
+        # window between the earlier read and the re-read open long enough for
+        # another writer to land in it, which is what the re-read must catch.
+        import asyncio
+        print(f"pause: about to re-read and write deal {deal_id} "
+              f"({deal.get('title')}); waiting {pause}s", flush=True)
+        await asyncio.sleep(float(pause))
     # Re-read immediately before the write - a duplicate may have appeared
     # since the check above, from this run's own earlier deals or another
     # team sharing the same book.
@@ -873,6 +882,19 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
         reasons.append("a matching open Activity appeared between the check and the write - "
                         "not creating a duplicate")
         return ActionStatus.EXISTING, recheck["records"][0], reasons
+    # The same party-level rule as `index.open_activity`: an open Activity on
+    # the customer with no deal set counts. Re-reading by deal_id alone let a
+    # teammate's party-linked next action through, and the agent wrote a
+    # duplicate beside it (job V2, 2026-10-06, Maumee River Hydraulics).
+    party_id = deal.get("party_id")
+    if party_id:
+        recheck = await client.list_("Activity", filters={"party_id": party_id, "done": False},
+                                     limit=100)
+        for activity in (recheck.get("records") or []) if isinstance(recheck, dict) else []:
+            if not activity.get("deal_id"):
+                reasons.append("an open Activity for this deal's customer appeared between the "
+                               "check and the write - not creating a duplicate")
+                return ActionStatus.EXISTING, activity, reasons
 
     created = await client.create("Activity", proposed)
     reasons.append("created after a fresh re-read found no existing open action")

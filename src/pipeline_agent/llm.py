@@ -6,6 +6,7 @@ dependency, so the backend is selected by configuration:
 
     MODEL_NAME=anthropic:claude-opus-5   Anthropic Messages API
     MODEL_NAME=ollama:llama3.1           a local Ollama daemon
+    MODEL_NAME=openrouter:qwen/qwen3.8-27b  any OpenRouter model (OpenAI protocol)
 
 Both halves are optional in the usual sense - the harness's other two tasks
 (`canonical`, `preflight`) never import this module, so the repo still runs
@@ -29,7 +30,14 @@ LLMCallable = Callable[[str, str], Awaitable[str]]
 
 ANTHROPIC = "anthropic"
 OLLAMA = "ollama"
-BACKENDS = (ANTHROPIC, OLLAMA)
+OPENROUTER = "openrouter"
+BACKENDS = (ANTHROPIC, OLLAMA, OPENROUTER)
+
+# OpenRouter speaks the OpenAI chat-completions protocol. Added 2026-10-06 so
+# the complex-jobs runs could continue on another model when Anthropic credit
+# ran out; the model id after the colon is OpenRouter's (e.g. qwen/qwen3.8-27b).
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_TIMEOUT = 300.0
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_TIMEOUT = 120.0
@@ -76,7 +84,9 @@ def _anthropic_backend(model: str) -> LLMCallable:
     # Zero-arg: the SDK resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an
     # `ant auth login` profile. An unset API key does not mean no credential,
     # so this deliberately does not pre-check for one.
-    client = anthropic.AsyncAnthropic()
+    # The SDK retries 429/5xx/overloaded on its own (2 by default); long loop
+    # jobs get a little more headroom (plan item P7).
+    client = anthropic.AsyncAnthropic(max_retries=4)
 
     async def call(prompt: str, system: str) -> str:
         response = await client.messages.create(
@@ -86,6 +96,14 @@ def _anthropic_backend(model: str) -> LLMCallable:
             thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
+        # Read by run_loop after each call, so a run records what it cost
+        # (plan item P6). An attribute rather than a second return value keeps
+        # the `(prompt, system) -> str` contract every backend shares.
+        usage = getattr(response, "usage", None)
+        call.last_usage = {
+            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        }
         # Thinking blocks are present but carry no answer; the loop parses the
         # text. Joining only text blocks keeps that contract.
         return "".join(b.text for b in response.content if b.type == "text")
@@ -128,9 +146,51 @@ def _ollama_backend(model: str) -> LLMCallable:
     return call
 
 
+def _openrouter_backend(model: str) -> LLMCallable:
+    key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPEN_ROUTER_API_KEY")
+    if not key:
+        raise LLMConfigError("the openrouter backend needs OPENROUTER_API_KEY "
+                             "(or OPEN_ROUTER_API_KEY) in the environment or .env")
+    url = os.environ.get("OPENROUTER_URL", OPENROUTER_URL)
+
+    def post_blocking(payload: dict) -> dict:
+        request = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"), method="POST",
+            # Cloudflare in front of some OpenAI-compatible hosts rejects the
+            # default Python user agent (error 1010).
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
+                     "User-Agent": "pipeline-agent/0.1"})
+        try:
+            with urllib.request.urlopen(request, timeout=OPENROUTER_TIMEOUT) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            if exc.code == 429 or exc.code >= 500:
+                # Named so run_loop's transient-error retry picks it up.
+                raise ConnectionError(f"HTTP {exc.code} from {url}: {detail[:300]}") from exc
+            raise LLMConfigError(f"HTTP {exc.code} from {url}: {detail[:300]}") from exc
+
+    async def call(prompt: str, system: str) -> str:
+        body = await asyncio.to_thread(post_blocking, {
+            "model": model,
+            "max_tokens": MAX_TOKENS,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": prompt}],
+        })
+        usage = body.get("usage") or {}
+        call.last_usage = {"input_tokens": usage.get("prompt_tokens") or 0,
+                           "output_tokens": usage.get("completion_tokens") or 0}
+        choices = body.get("choices") or [{}]
+        return (choices[0].get("message") or {}).get("content") or ""
+
+    return call
+
+
 def build_llm(model_name: str) -> LLMCallable:
     """Resolve MODEL_NAME to the callable `run_loop` expects."""
     backend, model = parse_model_name(model_name)
     if backend == ANTHROPIC:
         return _anthropic_backend(model)
+    if backend == OPENROUTER:
+        return _openrouter_backend(model)
     return _ollama_backend(model)
