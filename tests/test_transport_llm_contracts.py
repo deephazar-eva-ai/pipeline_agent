@@ -1,4 +1,8 @@
-"""Tests for MCP transport, client, artifact, and LLM configuration behaviour."""
+"""Tests for the MCP transport and client, run artifacts, and model-name parsing.
+
+Nothing here touches the network: HTTP calls are either replaced with a
+scripted transport or have ``urlopen`` patched to fail.
+"""
 
 import asyncio
 import io
@@ -11,13 +15,10 @@ from pipeline_agent.config import Settings
 from pipeline_agent.harness.artifacts import run_artifact
 from pipeline_agent.harness.base import TaskRun
 from pipeline_agent.llm import LLMConfigError, parse_model_name
+from pipeline_agent.mcp import transport
 from pipeline_agent.mcp.client import MCPToolError
 from pipeline_agent.mcp.real_client import RealMCPClient
-from pipeline_agent.mcp.tool_names import (
-    ENTITY_SCOPED,
-    SurfaceError,
-    to_wire,
-)
+from pipeline_agent.mcp.tool_names import ENTITY_SCOPED, SurfaceError, to_wire
 from pipeline_agent.mcp.transport import (
     JsonRpcError,
     JsonRpcTransport,
@@ -28,329 +29,168 @@ from pipeline_agent.mcp.transport import (
 )
 
 
-class Replies(JsonRpcTransport):
-    """Transport test double that returns predefined responses."""
+MCP_URL = "https://example.test"
+MCP_ENDPOINT = f"{MCP_URL}/api/mcp"
 
-    def __init__(self, replies):
-        super().__init__(
-            "https://example.test",
-            "token",
-        )
-        self.replies = iter(replies)
+
+class FakeTransport(JsonRpcTransport):
+    """Transport that returns canned JSON-RPC responses instead of posting."""
+
+    def __init__(self, responses):
+        super().__init__(MCP_URL, "token")
+        self.responses = iter(responses)
         self.payloads = []
 
     async def _post(self, payload):
         self.payloads.append(payload)
-        return next(self.replies)
+        return next(self.responses)
+
+
+def http_error(status, reason="x", body=b"bad"):
+    """Return a urlopen replacement that raises the given HTTP error."""
+
+    def fail(*_args, **_kwargs):
+        raise urllib.error.HTTPError(MCP_ENDPOINT, status, reason, {}, io.BytesIO(body))
+
+    return fail
+
+
+# --- model names -------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "value, expected",
     [
-        (
-            "anthropic:model",
-            ("anthropic", "model"),
-        ),
-        (
-            " Ollama : llama ",
-            ("ollama", "llama"),
-        ),
+        pytest.param("anthropic:model", ("anthropic", "model"), id="plain"),
+        pytest.param(" Ollama : llama ", ("ollama", "llama"), id="whitespace-and-case"),
     ],
 )
-def test_model_name_is_parsed_from_provider_and_model(
-    value,
-    expected,
-):
+def test_parse_model_name(value, expected):
     assert parse_model_name(value) == expected
 
 
 @pytest.mark.parametrize(
     "value",
-    [
-        "",
-        "anthropic",
-        "x:model",
-        "ollama:",
-    ],
+    ["", "anthropic", "x:model", "ollama:"],
+    ids=["empty", "no-model", "unknown-provider", "empty-model"],
 )
-def test_invalid_model_name_is_rejected(value):
+def test_parse_model_name_rejects_bad_values(value):
     with pytest.raises(LLMConfigError):
         parse_model_name(value)
 
 
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "not-a-tool",
-        "report",
-        "transition",
-    ],
-)
-def test_unknown_entity_tool_is_rejected_before_wire_translation(
-    tool_name,
-):
+# --- tool names --------------------------------------------------------------
+
+
+def test_to_wire_translates_known_entity_scoped_tool():
+    assert to_wire(ENTITY_SCOPED, "list", {"entity": "Deal"}) == ("Deal.list", {})
+
+
+@pytest.mark.parametrize("tool", ["not-a-tool", "report", "transition"])
+def test_to_wire_rejects_unsupported_entity_scoped_tool(tool):
     with pytest.raises(SurfaceError):
-        to_wire(
-            ENTITY_SCOPED,
-            tool_name,
-            {"entity": "Deal"},
-        )
+        to_wire(ENTITY_SCOPED, tool, {"entity": "Deal"})
 
 
-def test_entity_list_tool_is_translated_to_wire_name():
-    result = to_wire(
-        ENTITY_SCOPED,
-        "list",
-        {"entity": "Deal"},
-    )
-
-    assert result == (
-        "Deal.list",
-        {},
-    )
+# --- JSON-RPC transport ------------------------------------------------------
 
 
-def test_json_rpc_error_is_raised_for_error_response():
-    client = Replies(
-        [
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "error": {
-                    "code": -32600,
-                    "message": "bad",
-                },
-            }
-        ]
-    )
+class TestJsonRpcTransport:
+    def test_request_returns_result(self):
+        client = FakeTransport([{"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}])
 
-    with pytest.raises(
-        JsonRpcError,
-        match="bad",
-    ):
-        asyncio.run(
-            client._request("tools/list")
-        )
+        assert asyncio.run(client._request("tools/list")) == {"tools": []}
 
+    def test_request_raises_on_error_response(self):
+        client = FakeTransport([
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "bad"}},
+        ])
 
-def test_json_rpc_result_is_returned_for_success_response():
-    client = Replies(
-        [
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {
-                    "tools": [],
-                },
-            }
-        ]
-    )
+        with pytest.raises(JsonRpcError, match="bad"):
+            asyncio.run(client._request("tools/list"))
 
-    result = asyncio.run(
-        client._request("tools/list")
-    )
+    @pytest.mark.parametrize("status", [401, 403, 500])
+    def test_http_error_keeps_status_code(self, status, monkeypatch):
+        monkeypatch.setattr("urllib.request.urlopen", http_error(status))
 
-    assert result == {
-        "tools": [],
-    }
+        with pytest.raises(TransportError) as exc:
+            JsonRpcTransport(MCP_URL, "token")._post_blocking({"jsonrpc": "2.0"})
+
+        assert exc.value.status == status
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    "body, expected",
     [
-        (
-            "",
-            None,
-        ),
-        (
-            "no-json",
-            "no-json",
-        ),
-        (
-            '{"ok": true}',
-            {"ok": True},
-        ),
+        pytest.param("", None, id="empty"),
+        pytest.param("no-json", "no-json", id="plain-text"),
+        pytest.param('{"ok": true}', {"ok": True}, id="json"),
     ],
 )
-def test_response_body_is_decoded_when_it_contains_json(
-    value,
-    expected,
-):
-    assert _maybe_json(value) == expected
+def test_maybe_json(body, expected):
+    assert _maybe_json(body) == expected
 
 
-def test_tool_result_content_is_unwrapped():
-    result = unwrap_tool_result(
-        {
-            "content": [
-                {
-                    "type": "text",
-                    "text": '{"id": "x"}',
-                }
-            ]
-        }
-    )
+class TestUnwrapToolResult:
+    def test_parses_json_text_content(self):
+        result = {"content": [{"type": "text", "text": '{"id": "x"}'}]}
 
-    assert result == {
-        "id": "x",
-    }
+        assert unwrap_tool_result(result) == {"id": "x"}
+
+    def test_raises_when_result_is_error(self):
+        result = {"content": [{"type": "text", "text": "denied"}], "isError": True}
+
+        with pytest.raises(ToolResultError):
+            unwrap_tool_result(result)
 
 
-def test_tool_error_response_raises_tool_result_error():
-    response = {
-        "content": [
-            {
-                "type": "text",
-                "text": "denied",
-            }
-        ],
-        "isError": True,
-    }
-
-    with pytest.raises(ToolResultError):
-        unwrap_tool_result(response)
+# --- RealMCPClient -----------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "status",
-    [
-        401,
-        403,
-        500,
-    ],
-)
-def test_http_error_is_converted_to_transport_error(
-    status,
-    monkeypatch,
-):
-    def fail_request(*_args, **_kwargs):
-        raise urllib.error.HTTPError(
-            "https://example.test/api/mcp",
-            status,
-            "x",
-            {},
-            io.BytesIO(b"bad"),
-        )
+def test_client_rejects_unknown_surface_on_init():
+    settings = Settings(mcp_url=MCP_URL, mcp_token="token", mcp_tool_surface="nope")
 
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        fail_request,
-    )
-
-    transport = JsonRpcTransport(
-        "https://example.test",
-        "token",
-    )
-
-    with pytest.raises(
-        TransportError
-    ) as exc:
-        transport._post_blocking(
-            {"jsonrpc": "2.0"}
-        )
-
-    assert exc.value.status == status
-
-
-def test_invalid_tool_surface_is_rejected_before_network_access():
-    settings = Settings(
-        mcp_url="https://example.test",
-        mcp_token="token",
-        mcp_tool_surface="nope",
-    )
-
-    with pytest.raises(
-        SurfaceError,
-        match="MCP_TOOL_SURFACE",
-    ):
+    with pytest.raises(SurfaceError, match="MCP_TOOL_SURFACE"):
         RealMCPClient(settings)
 
 
-def test_http_authentication_failure_is_reported_as_a_tool_error(
-    monkeypatch,
-):
-    def fail_request(*_args, **_kwargs):
-        raise urllib.error.HTTPError(
-            "https://example.test/api/mcp",
-            401,
-            "unauthorized",
-            {},
-            io.BytesIO(b"bad token"),
-        )
+def test_client_reports_auth_failure_as_http_error_not_refusal(monkeypatch):
+    async def run_inline(func, *args):
+        return func(*args)
 
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        fail_request,
-    )
+    # The client posts via asyncio.to_thread; run it inline so the patched
+    # urlopen is hit in this thread and the test never touches the network.
+    monkeypatch.setattr(transport.urllib.request, "urlopen",
+                        http_error(401, "unauthorized", b"bad token"))
+    monkeypatch.setattr(transport.asyncio, "to_thread", run_inline)
+    client = RealMCPClient(Settings(mcp_url=MCP_URL, mcp_token="bad"))
 
-    client = RealMCPClient(
-        Settings(
-            mcp_url="https://example.test",
-            mcp_token="bad",
-        )
-    )
-
-    with pytest.raises(
-        MCPToolError
-    ) as exc:
-        asyncio.run(
-            client.call_tool(
-                "list",
-                {"entity": "Deal"},
-            )
-        )
+    with pytest.raises(MCPToolError) as exc:
+        asyncio.run(client.call_tool("list", {"entity": "Deal"}))
 
     assert "HTTP 401" in exc.value.message
     assert "policy" not in exc.value.message.lower()
 
 
-def test_completed_artifact_is_marked_completed(tmp_path):
-    settings = Settings(
-        output_dir=str(tmp_path),
-        mcp_token="secret",
-    )
-
-    with run_artifact(
-        str(tmp_path),
-        "ok",
-        task={"id": "ok"},
-        settings=settings,
-    ) as writer:
-        writer.finalize(
-            TaskRun(
-                task_id="ok",
-                ended="done",
-            )
-        )
-
-        run_dir = writer.run_dir
-
-    status = json.loads(
-        (run_dir / "status.json").read_text()
-    )
-
-    assert status["status"] == "completed"
+# --- run artifacts -----------------------------------------------------------
 
 
-def test_artifact_records_an_exception(tmp_path):
-    settings = Settings(
-        output_dir=str(tmp_path),
-        mcp_token="secret",
-    )
+class TestRunArtifact:
+    @pytest.fixture
+    def settings(self, tmp_path):
+        return Settings(output_dir=str(tmp_path), mcp_token="secret")
 
-    with pytest.raises(RuntimeError):
-        with run_artifact(
-            str(tmp_path),
-            "bad",
-            task={"id": "bad"},
-            settings=settings,
-        ):
-            raise RuntimeError("boom")
+    def test_finished_run_is_marked_completed(self, tmp_path, settings):
+        with run_artifact(str(tmp_path), "ok", task={"id": "ok"}, settings=settings) as writer:
+            writer.finalize(TaskRun(task_id="ok", ended="done"))
+            run_dir = writer.run_dir
 
-    error_files = [
-        path / "error.txt"
-        for path in tmp_path.iterdir()
-        if (path / "error.txt").is_file()
-    ]
+        status = json.loads((run_dir / "status.json").read_text())
+        assert status["status"] == "completed"
 
-    assert error_files
+    def test_exception_is_reraised_and_written_to_error_file(self, tmp_path, settings):
+        with pytest.raises(RuntimeError):
+            with run_artifact(str(tmp_path), "bad", task={"id": "bad"}, settings=settings):
+                raise RuntimeError("boom")
+
+        assert any((path / "error.txt").is_file() for path in tmp_path.iterdir())

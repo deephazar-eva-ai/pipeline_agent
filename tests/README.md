@@ -1,7 +1,7 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 13 test modules and **272 passing tests**. The
+Agent. It currently contains 14 test modules and **297 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 and Keystone-specific data and tenant contracts.
@@ -26,7 +26,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-09-30**: `272 passed in 0.38s`.
+The latest local execution was on **2026-10-07**: `297 passed in 0.31s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several
@@ -58,15 +58,18 @@ loaded only by the snapshot test, and contains no live tenant data.
   request guards, data quality, tenant detection, and timezone behavior.
 - `test_keystone_us_entity_snapshots.py` — read-only validation of the
   bundled synthetic US tax, conversion, and fulfillment fixture.
+- `test_pipeline_enhancements.py` — aggregate and derived-analysis boundaries,
+  loop duplicate/repeat guards, request splitting, figure validation, and
+  opt-in in-memory write behavior.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.
 
 ## Live verification
 
 Tests are offline by default and do not create CRM records. The most recent
-recorded live read-only verification is dated 2026-09-29 in
-[EVIDENCE.md](EVIDENCE.md); it was not rerun as part of the 2026-09-30 offline
-suite. Live preflight and canonical propose-mode verification require
+recorded live read-only verification is dated 2026-10-07 in
+[EVIDENCE.md](EVIDENCE.md); it was not rerun as part of the offline suite.
+Live preflight and canonical propose-mode verification require
 `AGENTSWITCH_MCP_URL` and `AGENTSWITCH_MCP_TOKEN`. Use `--exec-mode propose`
 for read-only verification. Write-mode execution remains opt-in and requires
 explicit approval, captured preconditions, and direct postcondition checks.
