@@ -40,11 +40,13 @@ DESCRIPTION = (
     'per run. {} returns a summary (counts, threshold, uncalled customers, data-issue '
     'counts, late-order count) plus the first page of deal rows. Arguments: '
     '"section": "deals" | "data_issues" | "late_orders" | "uncalled"; "offset", "limit" '
-    f'(max {MAX_PAGE}) to page a section; for deals also "rotting_only": true or '
+    f'(max {MAX_PAGE}) to page a section; for deals also "rotting_only": true, "rule": '
+    '"contact" (only deals rotting by real contact, not by the platform\'s flag) or '
     '"deal_id": id; for data_issues also "code": one issue code. A deal row has the last '
     "real customer contact (completed call/meeting/email, traced through the customer, "
-    "this agent's own tasks excluded), days since contact, whether it is rotting and "
-    "why_rotting, the open next action and whether it is overdue, the deal's quotes "
+    "this agent's own tasks excluded), days since contact, whether it is rotting (by "
+    "either rule) with rotting_by_contact, rotting_by_platform_flag and why_rotting, "
+    "the open next action and whether it is overdue, the deal's quotes "
     "(status, expiry, expired) and orders made from them, and the customer's late orders. "
     "Data issues include stages the deal's pipeline does not define and activities linked "
     "to another customer's deal. Prefer it over _rot_days, which resets when tasks are "
@@ -136,8 +138,15 @@ async def analyse(client: MCPClient, *, run_id: str = "loop") -> dict:
                                        "overdue": bool(due and due < today),
                                        "written_by_this_agent": agent_authored}
         if deal_id in rotting:
+            ev = rotting[deal_id].rot_evidence
             row["proposed_action"] = rotting[deal_id].action_status.value
-            row["why_rotting"] = _why(rotting[deal_id].rot_evidence)
+            row["why_rotting"] = _why(ev)
+            # `rotting` is either rule. A request that defines rot by real contact
+            # and forbids the platform field needs them apart: on Suryodaya 62 of
+            # 68 are flagged only by _rot_level, and Sonnet listed all 68 for a
+            # contact-only question (job H1, 2026-10-07).
+            row["rotting_by_contact"] = bool(ev.get("independently_flags"))
+            row["rotting_by_platform_flag"] = bool(ev.get("platform_flags"))
         row["quotes"] = quotes_by_deal.get(deal_id, [])
         row["orders"] = orders_by_deal.get(deal_id, [])
         row["customer_late_orders"] = late_by_party.get(deal.get("party_id"), 0)
@@ -176,7 +185,11 @@ async def analyse(client: MCPClient, *, run_id: str = "loop") -> dict:
         "summary": {
             "analyzed_at": answer.analyzed_at, "today": today, "timezone": tz_name,
             "rot_threshold_days": answer.deal_rot_days, "open_deals": len(rows),
-            "rotting_deals": answer.candidates_found, "excluded_open_deals": len(excluded),
+            "rotting_deals": answer.candidates_found,
+            "rotting_by_contact": sum(1 for r in rows if r.get("rotting_by_contact")),
+            "rotting_by_platform_flag_only": sum(1 for r in rows if r.get("rotting")
+                                                 and not r.get("rotting_by_contact")),
+            "excluded_open_deals": len(excluded),
             "uncalled_customers": len(answer.uncalled),
             "data_issue_counts": counts, "late_orders": len(answer.late_orders),
         },
@@ -224,6 +237,8 @@ def view(analysis: dict, arguments: dict | None = None) -> dict:
             rows = [r for r in rows if r["deal_id"] == arguments["deal_id"]]
         if arguments.get("rotting_only"):
             rows = [r for r in rows if r["rotting"]]
+        if arguments.get("rule") == "contact":
+            rows = [r for r in rows if r.get("rotting_by_contact")]
     if section == "data_issues" and arguments.get("code"):
         rows = [r for r in rows if r["code"] == arguments["code"]]
     return {"section": section, **_page(rows, arguments)}

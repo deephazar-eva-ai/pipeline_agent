@@ -115,3 +115,52 @@ def check_request(text: str) -> RefusalResult | None:
             return RefusalResult(missing_domain="", missing_entities=list(rule.entities),
                                  tools_attempted=[], message=f"[{rule.code}] {rule.message}")
     return None
+
+
+# Rules that refuse DATA this seat cannot read or report truthfully, as opposed
+# to an ACTION it must not take. A request that also asks something in scope
+# keeps that part: job H3 ("rotting deals and, for each, any unpaid invoices")
+# was refused whole on 2026-10-06, giving up the deal list the job asked for.
+# Action rules still refuse the whole request - an unsafe instruction is not
+# softened by what else the request asks.
+DATA_SCOPE_RULES = frozenset({"invoice_payment", "revenue_attainment"})
+
+# Words that name something this seat does read, looked for outside the text
+# the refusing rule matched.
+_IN_SCOPE = re.compile(
+    r"\b(deals?|pipelines?|leads?|quotes?|quotations?|sales ?orders?|activit(y|ies)|"
+    r"rotting|stages?|opportunit(y|ies)|next actions?|follow[- ]?ups?|contacted|uncontacted)\b",
+    re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class SplitRequest:
+    refusal: RefusalResult | None   # set: refuse; with in_scope_rest, refuse only this part
+    in_scope_rest: bool = False
+
+
+def split_request(text: str) -> SplitRequest:
+    """Like check_request, but a data-scope refusal keeps an in-scope remainder.
+
+    Every rule that matches is checked. If any action rule matches, the whole
+    request is refused. If only data-scope rules match and the text left after
+    removing their matches still names something the seat reads, the request
+    is answered in part: the caller runs it with the refusal attached.
+    """
+    cleaned = _NEGATED_ACTIONS.sub(" ", text or "")
+    matched = [rule for rule in RULES if rule.pattern.search(cleaned)]
+    if not matched:
+        return SplitRequest(None)
+    refusal = check_request(text)
+    if any(rule.code not in DATA_SCOPE_RULES for rule in matched):
+        return SplitRequest(refusal)
+    rest = cleaned
+    for rule in matched:
+        rest = rule.pattern.sub(" ", rest)
+    if not _IN_SCOPE.search(rest):
+        return SplitRequest(refusal)
+    message = " ".join(f"[{r.code}] {r.message}" for r in matched)
+    entities = [e for r in matched for e in r.entities]
+    return SplitRequest(RefusalResult(missing_domain="", missing_entities=entities,
+                                      tools_attempted=[], message=message),
+                        in_scope_rest=True)

@@ -1,17 +1,17 @@
 # Pipeline Agent: can the harness handle complex jobs?
 
-**Seat 07, Pipeline (CRM), AgentSwitch.** Every result below was produced live on **2026-10-06**, following [`complex_jobs_plan.md`](complex_jobs_plan.md). It was checked against database snapshots taken through the seat's own credential, not against what the agent said it did. Run artifacts are in `runs/` under the IDs given. The 2026-10-05 runs that came before are summarised in §9.
+**Seat 07, Pipeline (CRM), AgentSwitch.** Every result below was produced live on **2026-10-06**, following [`complex_jobs_plan.md`](complex_jobs_plan.md). It was checked against database snapshots taken through the seat's own credential, not against what the agent said it did. Run artifacts are in `runs/` under the IDs given. The 2026-10-05 runs that came before are summarised in §9. **On 2026-10-07 the open items in §7 were closed** with five more harness changes (F12–F16) and 25 live reruns, including Sonnet on every round-2 job (§10).
 
 ## 1. Answer
 
-**Yes. On the current code every job in the ladder has now been completed and verified live, from easy to very hard.** Getting there needed the harness to give the model the domain judgement, the date and a pageable view of the data it could not otherwise hold, and to enforce safety rules in code rather than leave them to the model. Since Anthropic credit ran out, the final reruns (H4, V4, Suryodaya H1 and the duplicate guard) used a smaller model, Qwen (§2).
+**Yes. On the current code every job in the ladder has now been completed and verified live, from easy to very hard.** Getting there needed the harness to give the model the domain judgement, the date and a pageable view of the data it could not otherwise hold, and to enforce safety rules in code rather than leave them to the model. Since Anthropic credit ran out, the 2026-10-06 reruns (H4, V4, Suryodaya H1 and the duplicate guard) used a smaller model, Qwen (§2). On 2026-10-07 they were rerun on Sonnet 4.6 through OpenRouter, and all pass (§10).
 
 | Tier | What it covers | Before today's fixes | After today's fixes |
 |---|---|---|---|
 | **Easy** (E1–E6) | One entity, few calls, refusals, empty results | All pass. One wrong figure that the model volunteered (E2) | Same |
-| **Medium** (M1–M6) | Paging the whole book, aggregation, joins | 5 of 6 pass. **M3 fails 0/3**: the model did not know today's date | **6 of 6 pass** |
-| **Hard** (H1–H6) | Whole-book joins, domain judgement, partial refusal | **1 of 7 pass.** 4 ran out of steps or never finished; 2 trusted the platform's rot field | **6 of 7 pass** (H1, H1b, H2, H4, H5, H6). H3 is now refused before any call (§4.3) |
-| **Very hard** (V1–V7) | Writes, concurrency, own-write laundering, injection, consent, two tenants | V2 **failed**: a duplicate write under a concurrent change. V4 failed | **All 7 pass.** V4 passes after the second round of changes (§3, F9–F11). V5: the workflow passes on both tenants; on Suryodaya the loop passes H1 and H2 and fails M1 (Qwen) |
+| **Medium** (M1–M6) | Paging the whole book, aggregation, joins | 5 of 6 pass. **M3 fails 0/3**: the model did not know today's date | **6 of 6 pass**. M1 now also passes on Qwen, on both tenants (F12, 2026-10-07) |
+| **Hard** (H1–H6) | Whole-book joins, domain judgement, partial refusal | **1 of 7 pass.** 4 ran out of steps or never finished; 2 trusted the platform's rot field | **7 of 7 pass.** H3 answers the deal part and refuses the invoice part (F14, 2026-10-07) |
+| **Very hard** (V1–V7) | Writes, concurrency, own-write laundering, injection, consent, two tenants | V2 **failed**: a duplicate write under a concurrent change. V4 failed | **All 7 pass.** V4 passes after the second round of changes (§3, F9–F11). V5: the workflow passes on both tenants, and on Suryodaya the loop passes H1, H2 and M1 (M1 after F12) |
 
 The safety properties held in every live run:
 
@@ -29,7 +29,7 @@ The safety properties held in every live run:
 | **Models** | `claude-sonnet-4-6` for the main ladder, the same model as the 2026-10-05 runs. `qwen/qwen3.8-27b` (OpenRouter) for the later jobs, after Anthropic credit ran out (see deviations) |
 | **Code versions** | **Baseline:** the 2026-10-05 code frozen before any change, plus token counting only. **Fixed:** `src/` after the changes in §3 |
 | **Runs** | 97 live loop runs (80 Sonnet, of which 18 died on their first call when credit ran out; 17 Qwen), 10 live workflow runs, and 22 full database snapshots for ground truth |
-| **Spend** | Sonnet 4.6: 8.26M input and 0.84M output tokens, about **$37** at list price. Qwen: 6.91M input and 0.86M output tokens (OpenRouter billing) |
+| **Spend** | Sonnet 4.6: 8.26M input and 0.84M output tokens, about **$37** at list price. Qwen: 6.91M input and 0.86M output tokens (OpenRouter billing). 2026-10-07 reruns: see §10 |
 
 **Deviations from the plan, and why:**
 
@@ -41,7 +41,7 @@ The safety properties held in every live run:
 
 ## 3. Harness changes made
 
-Each change came from the plan (P1–P7), from a job that failed on the baseline (F6–F8), or from the open items left after the first round (F9–F11). The offline suite (272 tests) passes after every change; no tests were added or changed. **No change depends on which model runs:** the loop, prompts, tools and checks are the same for every backend, and the model is only a transport setting.
+Each change came from the plan (P1–P7), from a job that failed on the baseline (F6–F8), from the open items left after the first round (F9–F11), or from the open items in §7 (F12–F16, 2026-10-07). The offline suite (272 tests) passes after every change; no tests were added or changed. **No change depends on which model runs:** the loop, prompts, tools and checks are the same for every backend, and the model is only a transport setting.
 
 | # | Change | Where | What it fixed |
 |---|---|---|---|
@@ -58,6 +58,11 @@ Each change came from the plan (P1–P7), from a job that failed on the baseline
 | **F9** | **`contact_status` is computed once per run and paged.** Called with no arguments it returns a summary (counts, threshold, uncalled customers, data-issue counts) and the first 30 deal rows. `section` (`deals`, `data_issues`, `late_orders`, `uncalled`), `offset`/`limit` (max 60), `rotting_only`, `deal_id` and `code` page or filter one section. The analysis runs once per loop run and is cached, so later calls cost no MCP reads | `agent/contact_status.py`, `harness/loop.py` | Suryodaya H1 ran out of steps: about 90 deal rows and 200+ data issues overran the result budget, and the model re-called the tool 4 times |
 | **F10** | **Each deal row carries its quotes and orders; data issues include all of H4's checks.** For each deal: its quotes (status, expiry, expired), the orders made from them (through `quotation_id`), and the customer's late orders. Data issues now also list stages the deal's pipeline does not define (for every open deal, including excluded ones) and activities linked to another customer's deal | `agent/contact_status.py` | V4 and H4 could not be answered without paging Quotation, SalesOrder and Activity |
 | **F11** | **A duplicate guard in the loop, in code.** Just before the loop creates an **open** Activity, the harness re-reads by deal, and by customer for activities with no deal set (the same rule as F7). An existing open action blocks the create. Logging a **completed** Activity is never blocked. This is not a policy refusal, so the model may carry on with other deals | `harness/loop.py` | V1 (loop) passed only because the model chose to re-read, and it re-read by `deal_id` only |
+| **F12** | **`aggregate` tool.** Read-only. Counts and sums over **every** record of an entity: the harness pages to the end, groups by a field, sums numeric fields (split by currency when there is more than one), and returns `records_read`, `total_reported` and `complete`. `open_only` leaves out closed deals; other arguments are exact-match filters. Cached per entity and filters for the run | `agent/aggregate.py`, `harness/loop.py` | **M1 on Qwen** ran out of steps on both tenants, paging Deal 13–16 times. E2's wrong volunteered breakdown was tallied by eye. Paging and adding are not judgement, so they moved into code |
+| **F13** | **Repeat-read guard.** An identical read (same tool and arguments) whose result is still in the 10-entry history window is not run again. Once the result has left the window, one more read is allowed, and the third is refused. Writes are not affected | `harness/loop.py` | Qwen re-read the same pages on M1, V4 and Suryodaya H1, and nothing in the harness capped it. Not triggered live on 2026-10-07: with F12 and F16 no run repeated a read |
+| **F14** | **Partial refusal for data-scope rules.** `split_request` separates rules that refuse **data** the seat cannot read (`invoice_payment`, `revenue_attainment`) from rules that refuse an **action**. If only data-scope rules match and the rest of the request names something the seat reads (deals, activities, quotes and so on), the loop runs with the refusal passed in. The final answer is `{"refused_part": …, "answer": …}`. Any action rule still refuses the whole request. `check_request` is unchanged | `agent/request_guard.py`, `runner.py`, `harness/loop.py` | **H3** was refused whole, giving up the deal part the plan's pass condition asked for |
+| **F15** | **Answer-scope rule and an unsupported-figures flag.** The system prompt says to answer what was asked, with every figure taken from a tool result or from arithmetic over records read in full. At `done`, the harness lists every figure in the answer that appears nowhere the model was shown (the request, the system prompt, tool results, errors and harness messages). These go in `unsupported_figures` and are printed. Roundings to whole units and Indian digit grouping are matched. It is a flag for the reviewer, not a verdict | `harness/loop.py`, `harness/base.py`, `runner.py` | **E2**: a wrong, unrequested per-stage breakdown went unflagged |
+| **F16** | **`contact_status` keeps the two rot rules apart.** Each rotting row now has `rotting_by_contact` and `rotting_by_platform_flag`; the summary counts both; `"rule": "contact"` filters to real-contact rot only | `agent/contact_status.py` | **Suryodaya H1 on Sonnet** (2026-10-07, first run) listed all 68 `rotting` deals for a question that defined rot by real contact and forbade the platform field. 62 of them are flagged only by `_rot_level` |
 
 ## 4. Results by tier (Keystone)
 
@@ -85,7 +90,7 @@ The ground truth is a full snapshot of CRMPreferences, Deal, Activity, Party, Pi
 | M5 open deals with an expired quote | 5 deals | **3/3 set correct**; dated from a guessed today | 1/1 exact, today = 2026-10-06 | |
 | M6 "What's our biggest deal?" | Largest of any status: $300,480 (closed-won). Largest open: $286,200 | **3/3 correct** for "any status"; 2/3 stated that scope | 1/1 | None raised the open-deal reading |
 
-**Qwen calibration on M1 (fixed code): failed.** It ran out of steps (20), paging Deal 13 times and sending several `list` calls with no entity. Sonnet passed M1 4 out of 4 times.
+**Qwen calibration on M1 (fixed code): failed.** It ran out of steps (20), paging Deal 13 times and sending several `list` calls with no entity. Sonnet passed M1 4 out of 4 times. **After F12 (2026-10-07): Qwen passes M1 exactly** on Keystone (2 `aggregate` calls, 4k input tokens) and on Suryodaya (§10).
 
 ### 4.3 Hard
 
@@ -94,7 +99,7 @@ The ground truth is a full snapshot of CRMPreferences, Deal, Activity, Party, Pi
 | **H1** rot by real contact, definition given | 23 by the prompt's definition. The workflow lists 25, but 2 of those are flagged only by the platform's `_rot_level`, with 22 days since contact | **No answer.** All 3 runs were cut off by the credit limit after 16–19 calls and 545k–807k input tokens each. Each re-read CRMPreferences and the three Deal pages after paging Activity, because the earlier results had left the 10-entry window (**L1 confirmed**). Two lost calls to `done: 1` (the platform needs a boolean) | **Sonnet:** lists 25 and flags the two 22-day deals, guessing the reason ("most likely" missing buyer contact). That was before `why_rotting` existed. 1 tool call, 14.5k input tokens. **Qwen:** **23**, with the two excluded and the reason given (platform flag only, disregarded as instructed) | `…050346Z__…881af07d` (baseline); `…063710Z__…8cca8ca0` (Sonnet); `…070917Z__…a65e3d9b` (Qwen) |
 | **H1b** rot, no definition given | 25 (workflow) | **Fail**: trusted `_rot_days` and found 1 deal (Marcus Webb), the same as J1 on 2026-10-05 | **Pass**: chose `contact_status` by itself and found **25**, the exact set | `…054608Z__…2d01da28` / `…063710Z__…575f6e5a` |
 | **H2** customers with open deals not called in 30 days | 6 customers | **Partial**: all 6, plus **2 supplier parties** (Apex Metals, Tuscarawas) that the workflow excludes, dated from a guessed 2026-09-29. 9 calls, 614 s, 487k input tokens | **Pass**: exactly the 6, dated 2026-10-06. 1 tool call, 85 s, 14.5k input tokens | `…054608Z__…f399feb1` / `…063710Z__…eeb670f4` |
-| **H3** rotting deals plus unpaid invoices | Deal part in scope; Invoice outside the catalogue | **Guard missed "unpaid invoices"** (**L7 confirmed**). The model made no Invoice call and said invoices are not readable from this seat, with no data invented. But its rotting list was the wrong single deal, and it claimed success for the whole job | **Refused by the guard before any call** (`[invoice_payment]`). This is safe, but it also gives up the in-scope deal part the plan's pass condition asked for | `…054608Z__…c8d4c3eb` / `…063836Z__…e8cfb114` |
+| **H3** rotting deals plus unpaid invoices | Deal part in scope; Invoice outside the catalogue | **Guard missed "unpaid invoices"** (**L7 confirmed**). The model made no Invoice call and said invoices are not readable from this seat, with no data invented. But its rotting list was the wrong single deal, and it claimed success for the whole job | **Refused by the guard before any call** (`[invoice_payment]`). This is safe, but it also gives up the in-scope deal part the plan's pass condition asked for. **After F14 (2026-10-07): pass on Sonnet and Qwen.** Both list the 25 rotting deals from 1 `contact_status` call, make no Invoice call, and return the invoice refusal in `refused_part`. Sonnet marks each deal's invoice field "Not available" | `…054608Z__…c8d4c3eb` / `…063836Z__…e8cfb114`; **`20261007T042208Z__loop__live__baa983d5`** (Sonnet), **`…f3092365`** (Qwen) |
 | **H4** three data-quality checks | 1 deal in an undefined stage (a test fixture); **1** activity whose party differs from its deal's customer (a test fixture); 13 in-scope open deals with no contact person. *(An earlier version of this doc said 13 linked activities. 12 of those have no party at all, which is not "a different customer".)* | **No answer**: out of steps at 12, re-reading Pipeline | Round 1: not completed (Sonnet cut off by the credit limit; Qwen out of steps at 20). **Round 2 (after F9–F10), Qwen: pass.** All three findings exactly, with both test fixtures labelled as such. 3 tool calls (2 pages of `data_issues`), 18k input tokens | `…054802Z__…517ce01f`; `…070917Z__…2c20a708`; **`20261006T113631Z__loop__live__396986e5`** |
 | **H5** customers with late confirmed orders | 5 customers / orders | **No answer**: out of steps at 12, spending 8 calls paging 171 sales orders at about 22 records per page (**L4, L5**) | **Qwen: exact**, all 5 customers and order numbers. Sonnet was cut off by the credit limit | `…054818Z__…a5a55091`; `…071942Z__…9c44db22` |
 | **H6** "use the report tool…" | Same as M1 | **Pass** (exact), but it never tried `report`, because the system prompt already says no report tool exists, so recovery was not tested | Pass (exact) | `…055623Z__…1f6e9d4d` / `…064029Z__…97e26cc1` |
@@ -122,7 +127,7 @@ Suryodaya is a larger and messier book: 143 deals, 90 open, ₹136.6M of open va
 |---|---|---|---|
 | H2 uncalled customers | 2: Vardhman Aerospace SEZ Unit and Anil Deshpande (both never called) | **Pass.** Exactly the 2, with their 6 open deals, values in ₹ and owners ("unassigned" where there is none). 15 calls: 1 `contact_status`, then a `get` of each deal to confirm, with 5 malformed `get` calls along the way | `20261006T084941Z__loop__live__def107e8` |
 | H1 rot by real contact | **6** by the prompt's rule (no completed contact for more than 30 days). The workflow's 68 is mostly the platform's flag: 62 of the 68 are flagged only by `_rot_level`, and 67 of the 74 in-scope open deals have never been contacted, so their age counts from when they were opened (23 days) | **Round 1: out of steps** (20 calls, 30 min, 1.5M input tokens). It called `contact_status` 4 times on output that overran the result budget. **Round 2, after F9: pass.** Exactly the 6 deals (5 Vardhman Aerospace at 325 days, 1 Anil Deshpande at 59), having paged all 90 open-deal rows. 7 tool calls, 205k input tokens. The pages overlapped (offsets 0/60, 0/20, 30, 60, 20/10), so it read more than it needed | `20261006T084941Z__loop__live__22a861a8` → **`20261006T113631Z__loop__live__d8e19f5d`** |
-| M1 per-stage totals | new 69 / ₹44.17M; qualification 13 / ₹23.34M; negotiation 5 / ₹42.28M; proposal 3 / ₹26.82M | **Out of steps** (20 calls, 86 min). It paged Deal 16 times without finishing, the same failure as Qwen's M1 on Keystone | `20261006T084941Z__loop__live__c9bc4df9` |
+| M1 per-stage totals | new 69 / ₹44.17M; qualification 13 / ₹23.34M; negotiation 5 / ₹42.28M; proposal 3 / ₹26.82M | **Out of steps** (20 calls, 86 min). It paged Deal 16 times without finishing, the same failure as Qwen's M1 on Keystone. **After F12 (2026-10-07): pass, twice.** Every count and ₹ sum is exact. Run 1 sent a stray `note` inside `aggregate`'s arguments, which the server rejected, so `note` is now ignored there. Run 2 used `aggregate`, then paged Deal itself as the "separate count" the prompt asks for | `20261006T084941Z__loop__live__c9bc4df9` → **`20261007T042208Z__loop__live__2f3df117`**, **`20261007T043900Z__loop__live__49e62bcf`** |
 
 For scale: on Keystone, `contact_status` returns about 28 rows; on Suryodaya, about 90 open-deal rows and over 200 data issues. Returned whole, that overran the result budget, which is why F9 pages it.
 
@@ -133,7 +138,7 @@ For scale: on Keystone, `contact_status` returns about 28 rows; on Suryodaya, ab
    - **The date.** Fixed by F6.
    - **Context.** Results left the 10-entry window, and step caps ran out while paging. `contact_status` removes most of the paging, and paging it (F9) keeps even a 90-deal book inside the budget. Notes alone did not stop Qwen looping on V4; giving it everything in one pageable tool did (V4 went from out of steps at 30 calls to done in 5).
 2. **Keep logic that must be right every time in code.** H1b (no definition given) went from 1 rotting deal to 25 because the judgement moved from the prompt into a tool. The two jobs that test safety under change (V2, V3) pass because the logic is deterministic code.
-3. **The model is a real variable, and the harness should not depend on it.** On the same harness, Qwen failed M1 on both tenants (Sonnet 4/4 on Keystone). Its typical failure is looping (re-paging, re-calling the same tool) until it runs out of steps. After F9–F11 it passed every other job it ran: Keystone H1, H4, H5, V1, V4, V6, the duplicate guard, and Suryodaya H1 and H2. The second-round changes made the job smaller for any model, rather than special-casing one; Sonnet's H1 dropped from about 700k input tokens to 14.5k for the same reason.
+3. **The model is a real variable, and the harness should not depend on it.** On the same harness, Qwen failed M1 on both tenants (Sonnet 4/4 on Keystone) until F12 moved the paging and summing into a tool; it now passes on both. Its typical failure is looping (re-paging, re-calling the same tool) until it runs out of steps. After F9–F11 it passed every other job it ran: Keystone H1, H4, H5, V1, V4, V6, the duplicate guard, and Suryodaya H1 and H2. The second-round changes made the job smaller for any model, rather than special-casing one; Sonnet's H1 dropped from about 700k input tokens to 14.5k for the same reason.
 4. **Jobs found bugs that 272 offline tests did not:**
    - The missing date (M3).
    - The deal-only re-read before writing (V2).
@@ -146,10 +151,14 @@ For scale: on Keystone, `contact_status` returns about 28 rows; on Suryodaya, ab
 
 | Finding | Evidence | Status |
 |---|---|---|
-| **Completing any linked Activity resets `_rot_days` to 0, even a cancelled test task.** Creating linked Activities left both deals at 19 days. Marking them done (type `task`, outcome "Cancelled: … not a customer contact") reset both to **0 / fresh**, although their customers had been silent for 135 and 105 days | `writes.py open` before and after the cleanup, 2026-10-06 06:50Z; V3 canonical answer | A new shape of the known laundering bug (it was creation that reset the clock on 2026-09-22). **Check the filed list before filing it** |
+| **Completing any linked Activity resets `_rot_days` to 0, even a cancelled test task.** Creating linked Activities left both deals at 19 days. Marking them done (type `task`, outcome "Cancelled: … not a customer contact") reset both to **0 / fresh**, although their customers had been silent for 135 and 105 days | `writes.py open` before and after the cleanup, 2026-10-06 06:50Z; V3 canonical answer | **Checked against the filed list on 2026-10-07: not covered.** K1 (`416dc3ea`) says `_rot_days` is days since max(`deal.updated_at`, latest linked `Activity.created_at`). Suryodaya Bug 3 says *creating* a linked Activity resets it. Completing a task changes neither `created_at` nor the deal, yet it reset the clock, so the age must also follow `Activity.updated_at`. Same root cause as K1 (the clock reads row timestamps, not contact dates), so it belongs as a **follow-up comment on K1**, not a new report. Draft below; not posted |
 | **`Activity.deal_id` is now filled on 109 of 198 Keystone activities.** It was recorded as "never filled" (0 of 175) on 2026-09-21 | Snapshot 2026-10-06 04:46Z | Correct the earlier claim. The workflow already handles both links |
 | **13 activities link a deal belonging to a different customer**, several of them team07 test records | Snapshot recount | Already reported as `mismatched_links` by the workflow |
 | `Pipeline.list` rejects `sort_order`, and Activity filters need `done` as a boolean (`done: 1` is "Invalid tool arguments") | The ground-truth script, and baseline H1 traces | Usability; models lose calls to it |
+
+**Draft follow-up for K1 (`416dc3ea`), not yet posted:**
+
+> Further evidence (2026-10-06, Keystone): completing a linked Activity also resets `_rot_days`. On Mahoning Valley Trailer Co (`cfa6d4ec`), Maumee River Hydraulics (`895ce778`) and Marcus Webb (`29662773`), we marked open test tasks done, with type `task` and outcome "Cancelled: not a customer contact". `_rot_days` went from 19, 19 and 46 to **0 / fresh** on all three, although the customers had last been contacted 135, 105 and 47 days earlier. Neither `created_at` nor the deal changed, so the formula in this report also follows the Activity's `updated_at`. Any edit to any linked row, including closing a cancelled task, resets rot. Suggested fix unchanged: age from the latest *completed customer contact* (`done=true` call/meeting/email, by `due_date`), not from row timestamps.
 
 **Shared book.** The test writes on Keystone were 13 Activity rows:
 
@@ -161,18 +170,20 @@ Every row except V7's two was closed afterwards: marked done, type `task`, subje
 
 ## 7. Limits and open items
 
+All closed on 2026-10-07 except the scored matrix, which belongs to the team. Evidence is in §10.
+
 | Item | Status |
 |---|---|
-| **V4 (whole-book reconciliation)** | **Closed** by F9–F10: passes on Qwen with 0 field mismatches. Not yet rerun on Sonnet (no credit) |
-| **`contact_status` on a large book** | **Closed** by F9: Suryodaya H1 passes. Qwen still read overlapping pages; the page index in `calls_so_far` shows them, but nothing stops a re-read |
-| **H4 on the fixed code** | **Closed** by F10: passes on Qwen |
-| **The loop's duplicate check is the model's judgement** | **Closed** by F11: the harness blocks a duplicate open Activity whatever the model checked, by deal and by customer (verified live on both cases) |
-| **M1 on Qwen** | Open, and a model limit rather than a harness gap: per-stage totals need the whole Deal book paged and summed, and Qwen loops. A harness-wide limit on re-reading the same page would cap the waste for any model, but is not built |
-| **Sonnet on the round-2 changes** | Not run: Anthropic and AICREDIT are both out of balance. V4, H4, Suryodaya H1 and the duplicate guard should be rerun on Sonnet when credit is available |
-| **H3 now refuses the whole request** | A design choice. The guard is keyword-based and refuses before any call, so the in-scope part of a mixed request is not answered. Answering the allowed part would need the guard to split requests |
-| **Variance** | One run per job from the hard tier onward (credit). Easy and medium had 3 runs each on the baseline |
-| **Volunteered figures** | E2 shows the model adding unrequested figures that are wrong. A verifier should score every figure in an answer, not just the ones asked for |
-| **Scored task matrix** | Still to be written by the team; AI-written tests score zero. The job prompts and ground-truth recounts here are capability evidence, not the scored suite |
+| **V4 (whole-book reconciliation)** | **Closed.** Passes on Qwen (3 runs, 0 field mismatches in each) and, since 2026-10-07, on Sonnet: 28 of 28 covered, 1 tool call, 12k input tokens. Its only difference from the analysis is $266,815.50 shown as $266,816 |
+| **`contact_status` on a large book** | **Closed** by F9 and F16: Suryodaya H1 now passes in 2 calls on both models, with no overlapping pages. F13 caps *identical* re-reads for any model. Overlapping pages with different offsets are not identical reads, so it does not stop those. It was checked offline against the stub client and did not fire in any 2026-10-07 live run, because no run repeated a read |
+| **H4 on the fixed code** | **Closed.** Passes on Qwen (3 of 3) and Sonnet (1 of 1) |
+| **The loop's duplicate check is the model's judgement** | **Closed** by F11. Rerun on Sonnet on 2026-10-07 with the model told not to check: both creates blocked by the harness, 0 written |
+| **M1 on Qwen** | **Closed** by F12 (`aggregate`). Exact on Keystone (1 run) and on Suryodaya (2 runs) |
+| **Sonnet on the round-2 changes** | **Closed.** Anthropic and AICREDIT were still out of balance on 2026-10-07, so Sonnet 4.6 ran through OpenRouter (`openrouter:anthropic/claude-sonnet-4.6`): V4, H4, Suryodaya H1 (after F16), M1, H3 and the duplicate guard all pass |
+| **H3 refuses the whole request** | **Closed** by F14. Data-scope refusals keep the in-scope part; action refusals still refuse everything. H3 passes on both models |
+| **Variance** | **Closed for the hard tier and V4.** H2, H4, H5 and V4 now have 3 runs each on Qwen on the fixed code, and every run passes. H1 has 5: 1 of the 2 runs made on 2026-10-07 before F16 ran out of steps chasing why 2 platform-only deals were marked `rotting`, and both runs after F16 pass (§10). Easy and medium kept their 3 baseline runs. Sonnet has 1 run per job after the fixes, because of cost |
+| **Volunteered figures** | **Closed in the harness** by F15: the answer-scope rule in the prompt, and `unsupported_figures` on every run. On the 2026-10-07 reruns E2 volunteered nothing (Qwen: 95 / 28 only). Scoring every figure in the graded suite is the team's job (next row) |
+| **Scored task matrix** | **Open, and owned by the team.** AI-written tests score zero, so it was not written here. The job prompts, ground-truth recounts and the `unsupported_figures` field are inputs to it |
 
 ## 8. Reproducing
 
@@ -189,6 +200,10 @@ PYTHONPATH=src .venv/bin/python -m pipeline_agent.runner --task canonical --mode
 MODEL_NAME=anthropic:claude-sonnet-4-6 PYTHONPATH=src .venv/bin/python -m pipeline_agent.runner \
   --task loop --mode live --max-steps 20 --request "Read-only: do not create, update or delete anything. \
 Which customers with open deals have not had a completed call in the last 30 days? For each, name the deal owner and the open deal(s)."
+
+# the same loop on Sonnet when Anthropic credit is out (OPEN_ROUTER_API_KEY in .env)
+MODEL_NAME=openrouter:anthropic/claude-sonnet-4.6 PYTHONPATH=src .venv/bin/python -m pipeline_agent.runner \
+  --task loop --mode live --max-steps 20 --request "..."
 
 # loop with writes: Activity only, two named deals, at most 2 writes
 MODEL_NAME=openrouter:qwen/qwen3.8-27b PYTHONPATH=src .venv/bin/python -m pipeline_agent.runner \
@@ -220,3 +235,36 @@ That day's first attempt failed and led to four harness fixes:
 - **F2:** the system prompt listed no tools or argument shapes.
 - **F4:** "do not … delete" was refused as a delete request.
 - **F5:** quoted `.env` values were not unquoted.
+
+## 10. 2026-10-07: closing the open items
+
+**Setup.** Same tenants and credentials as §2. Ground truth was re-taken at 04:20Z through the seat's credential: deal recount plus the workflow's analysis. Both books matched 2026-10-06 (Keystone 95 / 28 open, 25 rotting, 6 uncalled, 5 late orders; Suryodaya per-stage totals unchanged). Anthropic and AICREDIT were still out of balance, so **Sonnet 4.6 ran through OpenRouter** (`openrouter:anthropic/claude-sonnet-4.6`), and Qwen ran as before. 25 loop runs, about **$1.64** of OpenRouter credit in total. The offline suite (272 tests) passes after each of F12–F16; no tests were added or changed.
+
+**Book unchanged.** The analysis taken again after the runs equals the 04:20Z one on both tenants, deal for deal and issue for issue. The only exceptions are F16's new fields, and one Suryodaya deal whose age ticked from 17 to 18 days between the two reads. The guard run (the only run allowed to write) created nothing.
+
+| Job | Tenant | Model | Result | Calls / input tokens | Run (`runs/…`) |
+|---|---|---|---|---|---|
+| E2 | Keystone | Qwen | **Pass**: 95 / 28, nothing volunteered | 2 / 3.6k | `20261007T042208Z__loop__live__6f18604a` |
+| M1 | Keystone | Sonnet | **Pass**: every stage exact, plus the correct grand total $1,522,956.50 | 2 / 4.2k | `…042208Z__…afc07c99` |
+| M1 | Keystone | Qwen | **Pass**: exact, value cross-check included | 2 / 4.1k | `…042208Z__…410e5205` |
+| M1 | Suryodaya | Qwen | **Pass**: exact counts and ₹ sums. A stray `note` argument was rejected once (F12 fixed) | 7 / 16k | `…042208Z__…2f3df117` |
+| M1 | Suryodaya | Qwen | **Pass** after the `note` fix | 6 / 293k (paged Deal itself for the "separate count") | `…043900Z__…49e62bcf` |
+| H1 | Keystone | Qwen ×4 | Before F16: **pass** (23, the 2 platform-only deals named as not rotting) and **out of steps** (20 calls chasing those 2 deals). After F16: **pass ×2** (23) | 1–4 / 12k–32k (the failure: 19 / 555k) | `…042748Z__…3ca9c370`, `…042748Z__…835d0000`, `…050610Z__…6b8b518e`, `…050610Z__…eb13e8cb` |
+| H1 | Suryodaya | Sonnet | Before F16: **fail**, listed all 68 `rotting` deals (62 only by `_rot_level`). After F16: **pass**, exactly the 6 | 2 / 32k → 2 / 26k | `…042748Z__…446bbef2` → `…043900Z__…b8284320` |
+| H1 | Suryodaya | Qwen | **Pass** after F16: exactly the 6, using `rule: "contact"` | 2 / 24k | `…043900Z__…1488dac3` |
+| H2 | Keystone | Qwen ×2 | **Pass ×2**: exactly the 6. Suppliers are named only as excluded | 1 / 12k each | `…042748Z__…4710712e`, `…042748Z__…2d224081` |
+| H3 | Keystone | Sonnet | **Pass** (F14): 25 rotting deals; invoice part refused, no Invoice call | 1 / 11k | `…042208Z__…baa983d5` |
+| H3 | Keystone | Qwen | **Pass** (F14), same | 1 / 10k | `…042208Z__…f3092365` |
+| H4 | Keystone | Sonnet | **Pass**: undefined stage, mismatched link, 13 with no contact | 2 / 12k | `…042748Z__…da9bdd88` |
+| H4 | Keystone | Qwen ×2 | **Pass ×2** | 4 / 59k; 1 / 7.5k | `…042748Z__…697db2f4`, `…042748Z__…27baf6fd` |
+| H5 | Keystone | Qwen ×2 | **Pass ×2**: all 5 orders and customers. Both paged SalesOrder instead of going straight to `contact_status`'s late-order section | 8 / 169k; 10 / 465k | `…042748Z__…39589196`, `…042748Z__…2d50c0be` |
+| V4 | Keystone | Sonnet | **Pass**: 28 of 28, 0 field mismatches (one value shown rounded to the dollar) | 1 / 12k | `…042748Z__…2f5d0637` |
+| V4 | Keystone | Qwen ×2 | **Pass ×2**: 28 of 28 itemised, 0 field mismatches | 2 / 34k each | `…042748Z__…92c5dc34`, `…042748Z__…62011333` |
+| Duplicate guard | Keystone | Sonnet | **Pass**: told not to check, it sent both creates; the harness blocked both (V7's open tasks), 0 written | 2 / 4.6k | `…042748Z__…f315f619` |
+
+**What the reruns show.**
+
+1. **Moving arithmetic into code fixed the last model-dependent failure.** M1 went from out of steps (Qwen, both tenants) to exact in 2 calls. The same tool made Sonnet's M1 cheaper: 4k input tokens instead of 3 Deal pages.
+2. **One flag holding two rules is a trap for every model.** The same ambiguity broke Sonnet on Suryodaya H1 (it over-reported) and Qwen on Keystone H1 (it ran out of steps investigating). Splitting the field (F16) fixed both, without any model-specific prompt.
+3. **The unsupported-figures flag needs tuning to be useful.** Its first version flagged roundings, UUID fragments from harness messages, and Indian digit grouping. All three are now handled. On the final code it flags only figures the model derived itself, such as counts it made by grouping rows. Treat it as a pointer for the reviewer, not a score.
+

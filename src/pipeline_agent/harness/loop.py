@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from pipeline_agent.agent import aggregate as agg
 from pipeline_agent.agent import contact_status as derived
 from pipeline_agent.agent.pipeline_checks import load_company_clock
 from pipeline_agent.agent.workflow import PROVENANCE_MARKER
@@ -65,6 +66,10 @@ SYSTEM = (
     "one-line index of every call you have made (calls_so_far) stay visible for the "
     "whole run.\n"
     "\n"
+    "Answer what was asked. Do not add figures nobody asked for: every figure in your "
+    "answer must come from a tool result, or from your arithmetic over records you have "
+    "read in full.\n"
+    "\n"
     "If a tool call is refused for a policy reason, do NOT retry it - state in your "
     "final answer exactly what is missing and why, and stop. Never fabricate a result "
     "for data you could not read, and never claim a write happened that did not."
@@ -90,6 +95,21 @@ _NOISE_FIELDS = frozenset({
 # correctly; a real retry attempt is still recorded in the trace before the
 # guard trips.
 MAX_REPEAT_DENIALS = 1
+
+# How many times the SAME read (tool and arguments) may run. A repeat whose
+# result is still in the history window is not run at all; once it has left the
+# window, one re-read is allowed. On 2026-10-06 Qwen paged Deal 13-16 times on
+# M1 and re-read overlapping contact_status pages on Suryodaya H1; nothing in
+# the harness stopped it. This caps the waste for any model.
+MAX_IDENTICAL_READS = 2
+HISTORY_WINDOW = 10
+
+# Figures in a final answer that appear in no tool result, the request or the
+# harness's own context are listed on the run for a reviewer (job E2: a
+# per-stage breakdown tallied by eye was wrong, and nothing flagged it). A flag,
+# not a verdict: a correct sum the model did itself is flagged too. Grouping by
+# 2 or 3 digits covers Indian lakh/crore formatting (₹4,51,902.60).
+_FIGURE = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?(?![\w])|(?<![\w.])\d+(?:\.\d+)?(?![\w])")
 
 # Model notes kept for the whole run (plan item P2). Bounded, oldest dropped
 # first, so a chatty model cannot crowd the request out of its own prompt.
@@ -231,6 +251,34 @@ async def open_activity_duplicate(client: MCPClient, arguments: dict) -> str | N
     return None
 
 
+def figures(text: str) -> set[str]:
+    """Every number in `text`, normalised (no thousands separators, no trailing zeros)."""
+    out = set()
+    # A JSON escape such as "\u20b9" (₹) would glue its hex digits onto the figure.
+    text = re.sub(r"\\u[0-9a-fA-F]{4}", " ", text or "")
+    for raw in _FIGURE.findall(text):
+        value = raw.replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        out.add(value)
+    return out
+
+
+def unsupported_figures(answer: Any, evidence: list[str]) -> list[str]:
+    seen: set[str] = set()
+    for text in evidence:
+        seen |= figures(text)
+    # A whole-number rounding of a figure the model was shown ($68,657 for
+    # 68657.35) is the same figure, not a new one.
+    seen |= {str(round(float(v))) for v in seen if "." in v}
+    shown = figures(answer if isinstance(answer, str) else json.dumps(answer, default=str))
+    return sorted(shown - seen, key=lambda v: (len(v), v))
+
+
+def _read_key(tool: str, arguments: dict) -> str:
+    return tool + json.dumps(arguments, sort_keys=True, default=str)
+
+
 def _call_line(n: int, tool: str, arguments: dict, outcome: str) -> str:
     args = {k: v for k, v in arguments.items() if k != "entity"}
     shown = json.dumps(args, default=str)
@@ -316,8 +364,15 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
     system = SYSTEM
     if derived_tools:
         system = system.replace("There is no read, count or report tool.",
-                                derived.DESCRIPTION + "There is no read, count or report tool.")
+                                derived.DESCRIPTION + agg.DESCRIPTION +
+                                "There is no other read, count or report tool.")
     system += "\n" + policy.describe()
+    if task.get("refused_part"):
+        # The request guard refused a data-scope part (runner.py, split_request);
+        # the model answers the rest and must say what was refused.
+        system += ("\nThe harness has already refused part of this request: "
+                   f"{task['refused_part']} Do not try to read that data. Answer the rest, "
+                   "and say in your answer which part was refused and why.")
     # The model has no clock. Without this, every date question was answered
     # against a "today" guessed from record timestamps - 2026-09-28/29 on a
     # 2026-10-06 run - so slipped deals and days-overdue were all short by a
@@ -338,6 +393,8 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
     denials: dict[tuple[str, str], int] = {}
     derived_cache: dict = {}
     writes_done = 0
+    # _read_key -> [times run, index in history of the latest result]
+    reads: dict[str, list[int]] = {}
 
     for _ in range(max_steps):
         prompt = json.dumps({"request": task["prompt"], "history": history[-10:],
@@ -385,10 +442,33 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                 run.ended = "refused"
                 break
 
-            if derived_tools and tool == derived.TOOL_NAME:
+            read_key = None if tool in WRITE_TOOLS else _read_key(tool, arguments)
+            if read_key in reads:
+                times, at = reads[read_key]
+                if len(history) - at <= HISTORY_WINDOW:
+                    repeat = (f"REPEAT {tool}({entity}) not run: you made this exact call "
+                              "already and its result is still in your history. Use it.")
+                elif times >= MAX_IDENTICAL_READS:
+                    repeat = (f"REPEAT {tool}({entity}) not run: this exact call has run "
+                              f"{times} times. Keep what you need from a result in notes.")
+                else:
+                    repeat = ""
+                if repeat:
+                    run.steps.append(Step("refused", tool, entity, False,
+                                           f"harness repeat-read guard: {repeat}",
+                                           arguments=arguments))
+                    history.append(repeat)
+                    calls.append(_call_line(len(calls) + 1, tool, arguments, "REPEAT not run"))
+                    continue
+
+            if derived_tools and tool in (derived.TOOL_NAME, agg.TOOL_NAME):
                 try:
-                    result = await derived.contact_status(
-                        client, arguments, run_id=task.get("run_id", "loop"), cache=derived_cache)
+                    if tool == agg.TOOL_NAME:
+                        result = await agg.aggregate(client, arguments, cache=derived_cache)
+                    else:
+                        result = await derived.contact_status(
+                            client, arguments, run_id=task.get("run_id", "loop"),
+                            cache=derived_cache)
                 except MCPToolError as e:
                     run.steps.append(Step("error", tool, "", False, str(e), arguments=arguments))
                     history.append(f"ERROR {tool}: {e.message}")
@@ -399,10 +479,17 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                 if len(text) > RESULT_CHAR_BUDGET:
                     text = text[:RESULT_CHAR_BUDGET] + "… [truncated]"
                 history.append(f"{tool}() -> {text}")
-                outcome = (f"total={result.get('total')} offset={result.get('offset')} "
-                           f"returned={result.get('returned')}" if "total" in result else
-                           f"summary open_deals={result.get('open_deals')} "
-                           f"rotting={result.get('rotting_deals')}")
+                reads[read_key] = [reads.get(read_key, [0])[0] + 1, len(history) - 1]
+                if tool == agg.TOOL_NAME:
+                    outcome = (f"read {result.get('records_read')} of "
+                               f"{result.get('total_reported')} groups={result.get('group_count')}"
+                               if "error" not in result else f"error {result['error']}")
+                elif "total" in result:
+                    outcome = (f"total={result.get('total')} offset={result.get('offset')} "
+                               f"returned={result.get('returned')}")
+                else:
+                    outcome = (f"summary open_deals={result.get('open_deals')} "
+                               f"rotting={result.get('rotting_deals')}")
                 calls.append(_call_line(len(calls) + 1, tool, arguments, outcome))
                 continue
 
@@ -436,6 +523,8 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                 result = await client.call_tool(tool, arguments)
                 run.steps.append(Step("tool_call", tool, entity, True, arguments=arguments))
                 history.append(f"{tool}({entity}) -> {compact_result(result)}")
+                if read_key is not None:
+                    reads[read_key] = [reads.get(read_key, [0])[0] + 1, len(history) - 1]
                 calls.append(_call_line(len(calls) + 1, tool, arguments, _outcome(result)))
                 if tool in WRITE_TOOLS:
                     writes_done += 1
@@ -470,6 +559,10 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
         elif action == "done":
             run.claimed_success = bool(act.get("claimed_success"))
             run.final_answer = act.get("answer")
+            # Everything the model was shown: the request, the system prompt, and
+            # every history entry (tool results, errors, harness blocks).
+            run.unsupported_figures = unsupported_figures(
+                run.final_answer, [task["prompt"], system, *history])
             run.steps.append(Step("answer", ok=True, detail=json.dumps(act.get("answer"), default=str)[:500]))
             run.ended = "done"
             break

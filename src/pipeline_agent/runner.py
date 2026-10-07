@@ -24,7 +24,7 @@ from typing import Any
 
 from pipeline_agent.agent.contract import AgentRequest, CanonicalAnswer, ExecutionMode, RefusalResult
 from pipeline_agent.agent.pipeline_checks import build_logged_contact, load_company_clock
-from pipeline_agent.agent.request_guard import check_request
+from pipeline_agent.agent.request_guard import check_request, split_request
 from pipeline_agent.agent.workflow import run_canonical_task
 from pipeline_agent.mcp.client import MCPToolError
 from pipeline_agent.config import Settings
@@ -258,6 +258,14 @@ async def main_async(args: argparse.Namespace) -> int:
             guarded = (check_request(args.request)
                        if args.task in ("canonical", "loop") and args.request != CANONICAL_REQUEST
                        else None)
+            if guarded is not None and args.task == "loop":
+                # A data-scope refusal (invoices, attainment) keeps the in-scope
+                # part of a mixed request; the loop answers it read-only as usual.
+                split = split_request(args.request)
+                if split.in_scope_rest:
+                    task["refused_part"] = split.refusal.message
+                    run.context_notes.append(f"request guard refused part: {split.refusal.message}")
+                    guarded = None
             if guarded is not None:
                 # Refused before any tool call: nothing read, nothing written.
                 result = guarded
@@ -272,8 +280,13 @@ async def main_async(args: argparse.Namespace) -> int:
                                      record_ids=frozenset(args.update_id),
                                      max_writes=args.max_writes if args.allow_write else 0,
                                      run_id=run_id)
+                notes = run.context_notes
                 run = await run_loop(task, client, llm, settings.model_name,
                                       max_steps=args.max_steps, write_policy=policy)
+                run.context_notes[:0] = notes
+                if task.get("refused_part"):
+                    run.final_answer = {"refused_part": task["refused_part"],
+                                        "answer": run.final_answer}
             elif args.task == "preflight":
                 result = await run_preflight(RecordingMCPClient(client, run.steps),
                                               configured_surface=settings.mcp_tool_surface)
@@ -296,6 +309,9 @@ async def main_async(args: argparse.Namespace) -> int:
                   f"claimed_success={run.claimed_success}, tokens in/out "
                   f"{run.input_tokens}/{run.output_tokens}, created={run.created_record_ids}, "
                   f"updated={run.updated_record_ids}")
+            if run.unsupported_figures:
+                print(f"figures not found in any tool result (check them): "
+                      f"{', '.join(run.unsupported_figures)}")
             if run.error:
                 print(f"error: {run.error}")
         else:

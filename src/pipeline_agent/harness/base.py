@@ -57,3 +57,6 @@ class TaskRun:
     # (e.g. the company clock that sets "today" for the model).
     context_notes: list[str] = field(default_factory=list)
     final_answer: Any = None
+    # Figures in the final answer found in no tool result (loop.py). For the
+    # reviewer to check; not a verdict.
+    unsupported_figures: list[str] = field(default_factory=list)
