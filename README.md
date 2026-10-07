@@ -64,7 +64,7 @@ postcondition on the live platform.
 
 | Case | Verifier asserts | Status |
 |---|---|---|
-| Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). A2–A4 pass; A1 is blocked by the platform's own LLM provider returning `401` (`can_configure: false`), re-checked 2026-10-03. Offline: `test_split_request_*` (data-scope refusals keep the in-scope part; action refusals refuse all) |
+| Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). **A1–A4 pass on both tenants (2026-10-07)**: the platform's LLM provider, which returned `401` until at least 2026-10-03, works again. Offline: `test_split_request_*` (data-scope refusals keep the in-scope part; action refusals refuse all) |
 | Rotting deal | Correct inclusion/exclusion and reported evidence | **Offline**: `test_view_filters_rotting_deals_by_contact_rule` (rot by real contact kept apart from the platform flag). No live verifier yet |
 | No recent contact | Correct contact classification, with date and channel evidence | Not started |
 | Existing next action | No duplicate activity; result links the existing one | **Offline**: `TestOpenActivityDuplicate` (open action on the deal, or on the customer with no deal, blocks a create; a completed contact is allowed) and `test_loop_blocks_duplicate_create_before_calling_client`. No live verifier yet |

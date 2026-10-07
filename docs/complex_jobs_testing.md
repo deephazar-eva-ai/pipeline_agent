@@ -89,7 +89,7 @@ On this platform the tool catalogue is the access boundary. Preflight compares t
 |---|---|
 | Model-driven runs | The canonical task and the digest are deterministic Python, so no model chooses the tool calls. The only `--task loop` run is `runs/20260921T094353Z__loop__dry-run__d45ed9fc`, which failed because the Ollama daemon was not reachable. Neither the `anthropic` nor the `ollama` backend has made a real API call. |
 | Writes at scale | `create-next-actions` has run live once, on a single deal, with consent. |
-| Scored refusal task | Checks A2–A4 pass. A1 is blocked because the platform's own LLM provider returns `401` (`can_configure: false`). This was re-checked on 2026-10-03. |
+| Scored refusal task | Checks A2–A4 pass. A1 is blocked because the platform's own LLM provider returns `401` (`can_configure: false`). This was re-checked on 2026-10-03. **Update 2026-10-07:** A1–A4 pass on both tenants; the provider works again. |
 | Scored task matrix | Six of seven cases have not been started: rotting deal, no recent contact, existing next action, missing next action, concurrent change, and ambiguous stage data. These must be written by a human, because AI-written tests score zero. **Update 2026-10-07:** the team's `tests/test_pipeline_enhancements.py` is part of the matrix and covers four of them offline (rotting deal, existing and missing next action, ambiguous stage data). No recent contact and concurrent change remain. |
 
 ## How to describe it
