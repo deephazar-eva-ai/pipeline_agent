@@ -41,7 +41,7 @@ The safety properties held in every live run:
 
 ## 3. Harness changes made
 
-Each change came from the plan (P1–P7), from a job that failed on the baseline (F6–F8), from the open items left after the first round (F9–F11), or from the open items in §7 (F12–F16, 2026-10-07). The offline suite (272 tests) passes after every change; no tests were added or changed. **No change depends on which model runs:** the loop, prompts, tools and checks are the same for every backend, and the model is only a transport setting.
+Each change came from the plan (P1–P7), from a job that failed on the baseline (F6–F8), from the open items left after the first round (F9–F11), or from the open items in §7 (F12–F16, 2026-10-07). The offline suite (272 tests) passed after every change; no tests were added or changed while the changes were made. Since then the suite has been extended to 297 tests in 14 modules (commit `471a95f`): `tests/test_pipeline_enhancements.py` covers F12–F16. **No change depends on which model runs:** the loop, prompts, tools and checks are the same for every backend, and the model is only a transport setting.
 
 | # | Change | Where | What it fixed |
 |---|---|---|---|
@@ -183,7 +183,7 @@ All closed on 2026-10-07 except the scored matrix, which belongs to the team. Ev
 | **H3 refuses the whole request** | **Closed** by F14. Data-scope refusals keep the in-scope part; action refusals still refuse everything. H3 passes on both models |
 | **Variance** | **Closed for the hard tier and V4.** H2, H4, H5 and V4 now have 3 runs each on Qwen on the fixed code, and every run passes. H1 has 5: 1 of the 2 runs made on 2026-10-07 before F16 ran out of steps chasing why 2 platform-only deals were marked `rotting`, and both runs after F16 pass (§10). Easy and medium kept their 3 baseline runs. Sonnet has 1 run per job after the fixes, because of cost |
 | **Volunteered figures** | **Closed in the harness** by F15: the answer-scope rule in the prompt, and `unsupported_figures` on every run. On the 2026-10-07 reruns E2 volunteered nothing (Qwen: 95 / 28 only). Scoring every figure in the graded suite is the team's job (next row) |
-| **Scored task matrix** | **Open, and owned by the team.** AI-written tests score zero, so it was not written here. The job prompts, ground-truth recounts and the `unsupported_figures` field are inputs to it |
+| **Scored task matrix** | **Open, and owned by the team.** AI-written tests score zero, so it was not written here. The job prompts, ground-truth recounts and the `unsupported_figures` field are inputs to it. `tests/test_pipeline_enhancements.py` (297-test suite, `471a95f`) now covers F12–F16 offline; whether it is part of the scored matrix is the team's call |
 
 ## 8. Reproducing
 
@@ -238,7 +238,7 @@ That day's first attempt failed and led to four harness fixes:
 
 ## 10. 2026-10-07: closing the open items
 
-**Setup.** Same tenants and credentials as §2. Ground truth was re-taken at 04:20Z through the seat's credential: deal recount plus the workflow's analysis. Both books matched 2026-10-06 (Keystone 95 / 28 open, 25 rotting, 6 uncalled, 5 late orders; Suryodaya per-stage totals unchanged). Anthropic and AICREDIT were still out of balance, so **Sonnet 4.6 ran through OpenRouter** (`openrouter:anthropic/claude-sonnet-4.6`), and Qwen ran as before. 25 loop runs, about **$1.64** of OpenRouter credit in total. The offline suite (272 tests) passes after each of F12–F16; no tests were added or changed.
+**Setup.** Same tenants and credentials as §2. Ground truth was re-taken at 04:20Z through the seat's credential: deal recount plus the workflow's analysis. Both books matched 2026-10-06 (Keystone 95 / 28 open, 25 rotting, 6 uncalled, 5 late orders; Suryodaya per-stage totals unchanged). Anthropic and AICREDIT were still out of balance, so **Sonnet 4.6 ran through OpenRouter** (`openrouter:anthropic/claude-sonnet-4.6`), and Qwen ran as before. 25 loop runs, about **$1.64** of OpenRouter credit in total. The offline suite (272 tests) passed after each of F12–F16; no tests were added or changed during this work. The suite now has 297 tests, including `tests/test_pipeline_enhancements.py` for F12–F16 (§3).
 
 **Book unchanged.** The analysis taken again after the runs equals the 04:20Z one on both tenants, deal for deal and issue for issue. The only exceptions are F16's new fields, and one Suryodaya deal whose age ticked from 17 to 18 days between the two reads. The guard run (the only run allowed to write) created nothing.
 
