@@ -265,8 +265,12 @@ Full report, including the eight platform bugs filed on 2026-09-24:
    checked against a scripted stand-in (clean refusal, retry tripping
    `MAX_REPEAT_DENIALS`, allowed read, unparseable reply), but neither the
    `anthropic` nor the `ollama` backend has made a single real API call.
-6. **The scored task matrix and its verifiers remain unwritten, on purpose.**
-   Per the rubric an AI-authored test scores zero - see `tasks/README.md` and
+6. **The scored task matrix is partly written** (update 2026-10-07). The team's
+   `tests/test_pipeline_enhancements.py` is part of it and covers rotting deal,
+   existing and missing next action, and bad stage data offline. The refusal task
+   in `tasks/` is the live case. Still missing: no recent contact, concurrent
+   change, and live verifiers for the offline cases. Per the rubric an AI-authored
+   test scores zero, so these stay with the team - see `tasks/README.md` and
    `tests/README.md`.
 
 ## What IS checked, as of 2026-09-22

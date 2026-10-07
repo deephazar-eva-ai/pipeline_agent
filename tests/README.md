@@ -6,8 +6,10 @@ suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 and Keystone-specific data and tenant contracts.
 
-It is not a scored, human-authored verifier and it cannot prove a shared-CRM
-postcondition. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
+One module, `test_pipeline_enhancements.py`, is part of the scored task matrix:
+the team wrote it by hand, and the root `README.md` maps its tests to the matrix
+cases. The other modules are regression tests and are not scored. No test here
+can prove a shared-CRM postcondition, because everything runs offline. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
 [EVIDENCE.md](EVIDENCE.md) for the latest execution record, and
 [US_ENTITY_SNAPSHOT_SCHEMA.md](US_ENTITY_SNAPSHOT_SCHEMA.md) for the synthetic
 US fixture contract.

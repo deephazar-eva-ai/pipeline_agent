@@ -170,7 +170,7 @@ Every row except V7's two was closed afterwards: marked done, type `task`, subje
 
 ## 7. Limits and open items
 
-All closed on 2026-10-07 except the scored matrix, which belongs to the team. Evidence is in §10.
+All closed on 2026-10-07 except the scored matrix, which belongs to the team and is now partly written. Evidence is in §10.
 
 | Item | Status |
 |---|---|
@@ -183,7 +183,7 @@ All closed on 2026-10-07 except the scored matrix, which belongs to the team. Ev
 | **H3 refuses the whole request** | **Closed** by F14. Data-scope refusals keep the in-scope part; action refusals still refuse everything. H3 passes on both models |
 | **Variance** | **Closed for the hard tier and V4.** H2, H4, H5 and V4 now have 3 runs each on Qwen on the fixed code, and every run passes. H1 has 5: 1 of the 2 runs made on 2026-10-07 before F16 ran out of steps chasing why 2 platform-only deals were marked `rotting`, and both runs after F16 pass (§10). Easy and medium kept their 3 baseline runs. Sonnet has 1 run per job after the fixes, because of cost |
 | **Volunteered figures** | **Closed in the harness** by F15: the answer-scope rule in the prompt, and `unsupported_figures` on every run. On the 2026-10-07 reruns E2 volunteered nothing (Qwen: 95 / 28 only). Scoring every figure in the graded suite is the team's job (next row) |
-| **Scored task matrix** | **Open, and owned by the team.** AI-written tests score zero, so it was not written here. The job prompts, ground-truth recounts and the `unsupported_figures` field are inputs to it. `tests/test_pipeline_enhancements.py` (297-test suite, `471a95f`) now covers F12–F16 offline; whether it is part of the scored matrix is the team's call |
+| **Scored task matrix** | **Partly written, by the team.** `tests/test_pipeline_enhancements.py` (`471a95f`, 25 tests) is part of the scored matrix. Offline, it covers rotting deal (contact rule vs platform flag), existing and missing next action (duplicate guard, exactly one create with provenance), bad stage data and the refusal guard split. **Still open:** no recent contact, concurrent change, and live verifiers for the offline cases. AI-written tests score zero, so none of it was written here. The job prompts, ground-truth recounts and the `unsupported_figures` field are inputs to it |
 
 ## 8. Reproducing
 

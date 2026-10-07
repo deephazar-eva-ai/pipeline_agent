@@ -2,10 +2,17 @@
 
 Per the capstone grading rubric: **a test written by Claude or Codex scores
 zero.** Everything in this directory that becomes a *scored* task or verifier
-must be written by a human team member, by hand. This README and
-`task_schema.json` are the only things here so far - documentation of the
-expected shape, not tasks themselves - so that authorship boundary is never
-ambiguous later.
+must be written by a human team member, by hand. Here so far: the scored
+refusal task (`mandatory_refusal_task.py`, with `run_refusal_task.sh`), plus this
+README and `task_schema.json`, which document the expected shape and are not tasks
+themselves, so that authorship boundary is never ambiguous later.
+
+**Update 2026-10-07.** Part of the matrix now lives outside this directory:
+`tests/test_pipeline_enhancements.py`, written by the team, is a scored module. It
+covers rotting deal, existing next action, missing next action, ambiguous stage
+data and the refusal guard offline, against in-memory clients. The root `README.md`
+maps each test to its case. No recent contact and concurrent change are not covered,
+and apart from the refusal task there is still no live verifier.
 
 ## What the harness gives you to build on
 

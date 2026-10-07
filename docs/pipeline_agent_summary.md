@@ -80,7 +80,7 @@ The runner's tasks are `canonical`, `preflight`, `loop` and `log-contact`. `log-
 |---|---|
 | `src/pipeline_agent/` | The agent, harness, MCP clients, preflight and CLI described above |
 | `tasks/` | `mandatory_refusal_task.py`: a human-authored scored task that probes the unavailable `Invoice` entity and verifies the refusal and that nothing changed, through direct REST snapshots. `run_refusal_task.sh` wraps it; see below. Also `task_schema.json` and the task-matrix `README.md` |
-| `tests/` | Offline regression suite: 13 modules, **272 passing**. It covers the workflow, guards, preflight, transport, artifacts and Keystone-specific contracts. It is *not* the scored verifier set. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
+| `tests/` | Offline suite: 14 modules, **297 passing** (2026-10-07). It covers the workflow, guards, preflight, transport, artifacts and Keystone-specific contracts. `test_pipeline_enhancements.py` (25 tests, written by the team) is part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
 | `gapreport/` | `crm_gapreport.md`: what the platform has, what competitors (Clarify, Monaco, Reevo) have that it lacks, and what an agent can close today. `deals_snapshot_schema.json`: the proposed `DealSnapshot` history table. `crm_gap_closure.pptx`: a 12-slide deck covering what exists, what is proposed, and the impact on schema and platform |
 | `bugs/` | `mybugs_all_2026-09-30.json`: all 75 bugs filed through `/api/bug-report/mine` (Suryodaya 41, Keystone 34). Re-checked on 2026-10-03: no new bugs or changes, all still `new` |
 | `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), plus a copy of the gap report |
@@ -142,7 +142,7 @@ See `docs/open_items.md`.
 
 - Write mode (`create-next-actions`) has not been run at scale.
 - The repo's own LLM backends (`anthropic`, `ollama`) have not made a real API call.
-- The remaining scored task matrix has to be written by a human; AI-written tests score zero under the rubric.
+- The scored task matrix is partly written: the refusal task (live) and `tests/test_pipeline_enhancements.py` (offline: rotting deal, existing and missing next action, bad stage data). No recent contact, concurrent change and live verifiers for the other cases remain, to be written by a human; AI-written tests score zero under the rubric.
 - The README is partly out of date. For example, it says `tests/` is empty and quotes the 2026-09-22 figures (81 of 133 deals rotting, 3 tool calls).
 
 ### Not on `main` yet

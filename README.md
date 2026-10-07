@@ -57,24 +57,28 @@ the platform's LLM provider is down.
 ### Scored task matrix
 
 The cases come from `tasks/README.md`. Tasks and verifiers are written by hand by the
-team; the rubric scores AI-written tests at zero.
+team; the rubric scores AI-written tests at zero. The team's offline module
+`tests/test_pipeline_enhancements.py` (25 tests, added 2026-10-07) is part of the scored
+matrix. It runs against in-memory clients, so it checks the agent's logic, not a
+postcondition on the live platform.
 
 | Case | Verifier asserts | Status |
 |---|---|---|
-| Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). A2–A4 pass; A1 is blocked by the platform's own LLM provider returning `401` (`can_configure: false`), re-checked 2026-10-03 |
-| Rotting deal | Correct inclusion/exclusion and reported evidence | Not started |
+| Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). A2–A4 pass; A1 is blocked by the platform's own LLM provider returning `401` (`can_configure: false`), re-checked 2026-10-03. Offline: `test_split_request_*` (data-scope refusals keep the in-scope part; action refusals refuse all) |
+| Rotting deal | Correct inclusion/exclusion and reported evidence | **Offline**: `test_view_filters_rotting_deals_by_contact_rule` (rot by real contact kept apart from the platform flag). No live verifier yet |
 | No recent contact | Correct contact classification, with date and channel evidence | Not started |
-| Existing next action | No duplicate activity; result links the existing one | Not started |
-| Missing next action | Exactly one correct activity exists after the run | Not started |
+| Existing next action | No duplicate activity; result links the existing one | **Offline**: `TestOpenActivityDuplicate` (open action on the deal, or on the customer with no deal, blocks a create; a completed contact is allowed) and `test_loop_blocks_duplicate_create_before_calling_client`. No live verifier yet |
+| Missing next action | Exactly one correct activity exists after the run | **Offline**: `test_loop_write_stamps_provenance_and_blocks_second_create` (exactly one create, provenance stamped, a rerun creates nothing). No live verifier yet |
 | Concurrent change | Agent re-reads; no stale or duplicate write | Not started |
-| Ambiguous or bad stage data | No unsafe invented action; flagged for review | Not started |
+| Ambiguous or bad stage data | No unsafe invented action; flagged for review | **Offline**: `test_data_issues_include_derived_checks` (a stage the pipeline does not define is reported as a data issue). No live verifier yet |
 
 ### Offline regression suite
 
-`tests/` holds 272 offline regression tests (`.venv/bin/pytest tests -q`). They cover the
-workflow, guards, preflight, transport, artifacts and Keystone-specific contracts. They
-protect the code; they are **not** the scored verifiers, because they cannot prove a
-postcondition on the live platform.
+`tests/` holds 297 offline tests in 14 modules (`.venv/bin/pytest tests -q`). They cover
+the workflow, guards, preflight, transport, artifacts and Keystone-specific contracts.
+One module, `test_pipeline_enhancements.py`, is part of the scored matrix (above). The
+other 13 are regression tests that protect the code and are not scored. None of them can
+prove a postcondition on the live platform.
 
 ## Status
 
@@ -105,8 +109,9 @@ invalidated and what it changed.
 Still outstanding: write mode (`--exec-mode create-next-actions`) has run
 exactly once, on one deal, with consent - not at scale; the measured rot
 boundary is a range (`[5, 9]` days) rather than a number; neither model
-backend has made a real API call; and the scored task matrix is deliberately
-left to a human team member. Full status: `docs/open_items.md`.
+backend has made a real API call; and the scored task matrix, written by the
+team, still lacks the no-recent-contact and concurrent-change cases and any live
+verifier beyond the refusal task. Full status: `docs/open_items.md`.
 
 ## Layout
 
@@ -130,7 +135,7 @@ src/pipeline_agent/
   llm.py                        model backends for the loop (anthropic | ollama)
   runner.py                    CLI entry point (Phase 4)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline regression suite, 272 tests - not the scored verifiers (see tests/README.md)
+tests/          offline suite, 297 tests; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md
 runs/           run artifacts land here, gitignored except .gitkeep
 ```
