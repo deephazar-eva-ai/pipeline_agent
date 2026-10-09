@@ -62,6 +62,29 @@ class Settings:
             output_dir=e.get("OUTPUT_DIR", "runs"),
         )
 
+    @classmethod
+    def from_central_env(cls, env: dict | None = None) -> "Settings":
+        """Settings for the central evaluator (agentswitch-harness.toml).
+
+        The evaluator supplies its own variable names and a disposable copy of
+        the instance whose host is not in KNOWN_TENANT_HOSTS, so the tenant
+        comes from AGENTSWITCH_INSTANCE rather than from the URL. No .env is
+        read on this path.
+        """
+        e = env if env is not None else os.environ
+        base = e.get("AGENTSWITCH_BASE_URL", "").rstrip("/")
+        if base.endswith("/api/mcp"):
+            base = base[: -len("/api/mcp")]  # the transport appends it
+        model = e.get("OPENAI_MODEL", "")
+        return cls(
+            mcp_url=base,
+            mcp_token=e.get("AGENTSWITCH_TOKEN", ""),
+            mcp_tool_surface=DEFAULT_MCP_TOOL_SURFACE,
+            tenant=e.get("AGENTSWITCH_INSTANCE", "") or "unknown",
+            model_name=f"openai:{model}" if model else "",
+            output_dir="runs",
+        )
+
     def redacted(self) -> dict:
         """Safe to log, print, or write into a run artifact."""
         out = {}

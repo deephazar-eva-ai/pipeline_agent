@@ -7,6 +7,7 @@ dependency, so the backend is selected by configuration:
     MODEL_NAME=anthropic:claude-opus-5   Anthropic Messages API
     MODEL_NAME=ollama:llama3.1           a local Ollama daemon
     MODEL_NAME=openrouter:qwen/qwen3.8-27b  any OpenRouter model (OpenAI protocol)
+    MODEL_NAME=openai:<model>            OPENAI_BASE_URL + OPENAI_API_KEY (central evaluator)
 
 Both halves are optional in the usual sense - the harness's other two tasks
 (`canonical`, `preflight`) never import this module, so the repo still runs
@@ -31,7 +32,8 @@ LLMCallable = Callable[[str, str], Awaitable[str]]
 ANTHROPIC = "anthropic"
 OLLAMA = "ollama"
 OPENROUTER = "openrouter"
-BACKENDS = (ANTHROPIC, OLLAMA, OPENROUTER)
+OPENAI = "openai"
+BACKENDS = (ANTHROPIC, OLLAMA, OPENROUTER, OPENAI)
 
 # OpenRouter speaks the OpenAI chat-completions protocol. Added 2026-10-06 so
 # the complex-jobs runs could continue on another model when Anthropic credit
@@ -151,8 +153,22 @@ def _openrouter_backend(model: str) -> LLMCallable:
     if not key:
         raise LLMConfigError("the openrouter backend needs OPENROUTER_API_KEY "
                              "(or OPEN_ROUTER_API_KEY) in the environment or .env")
-    url = os.environ.get("OPENROUTER_URL", OPENROUTER_URL)
+    return _chat_completions_backend(model, os.environ.get("OPENROUTER_URL", OPENROUTER_URL), key)
 
+
+def _openai_backend(model: str) -> LLMCallable:
+    """The central evaluator's platform model. OPENAI_BASE_URL is used the way
+    the OpenAI SDK uses it: the base already carries any /v1, and
+    /chat/completions is appended."""
+    base = os.environ.get("OPENAI_BASE_URL", "").strip().rstrip("/")
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not base or not key:
+        raise LLMConfigError("the openai backend needs OPENAI_BASE_URL and OPENAI_API_KEY "
+                             "in the environment")
+    return _chat_completions_backend(model, base + "/chat/completions", key)
+
+
+def _chat_completions_backend(model: str, url: str, key: str) -> LLMCallable:
     def post_blocking(payload: dict) -> dict:
         request = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"), method="POST",
@@ -193,4 +209,6 @@ def build_llm(model_name: str) -> LLMCallable:
         return _anthropic_backend(model)
     if backend == OPENROUTER:
         return _openrouter_backend(model)
+    if backend == OPENAI:
+        return _openai_backend(model)
     return _ollama_backend(model)
