@@ -473,6 +473,32 @@ def test_loop_does_not_repeat_identical_read():
     assert any("repeat-read guard" in detail for detail in refusals(result))
 
 
+def test_loop_can_emit_low_detail_live_events(tmp_path, monkeypatch):
+    event_log = tmp_path / "nested" / "events.jsonl"
+    monkeypatch.setenv("PIPELINE_EVENT_LOG", str(event_log))
+    llm = scripted_llm(
+        tool_call("list", entity="Deal"),
+        done({"deals": 4}),
+    )
+
+    result = run(run_loop(
+        {"id": "event-test", "prompt": "List deals.", "run_id": "run-42"},
+        StubMCPClient(), llm, "test", max_steps=2, derived_tools=False,
+    ))
+
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    assert result.ended == "done"
+    assert [event["event"] for event in events] == [
+        "run_started", "tool_finished", "run_finished",
+    ]
+    assert events[1]["tool"] == "list"
+    assert events[1]["entity"] == "Deal"
+    assert events[1]["outcome"] == "success"
+    assert events[1]["run_id"] == "run-42"
+    assert "arguments" not in events[1]
+    assert "result" not in events[1]
+
+
 def test_loop_blocks_duplicate_create_before_calling_client():
     client = StubMCPClient()
     llm = scripted_llm(

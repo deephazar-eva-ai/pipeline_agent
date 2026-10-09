@@ -1126,6 +1126,25 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
         unique_deals.append(deal)
     duplicate_deals, all_deals = len(all_deals) - len(unique_deals) - no_id, unique_deals
 
+    # Explicit IDs are a safety boundary, not merely a display filter. In
+    # particular, Keystone IDs passed under a Suryodaya credential used to be
+    # reported as "not rotting" and a successful zero-write run, hiding a
+    # cross-tenant mistake. Refuse before any Activity read or write when an
+    # addressed record is absent from this tenant.
+    if request.deal_ids:
+        wanted = {str(deal_id) for deal_id in request.deal_ids}
+        tenant_ids = {str(deal.get("id")) for deal in all_deals}
+        absent = sorted(wanted - tenant_ids)
+        if absent:
+            return RefusalResult(
+                missing_domain="",
+                missing_entities=["Deal"],
+                tools_attempted=["list(Deal)"],
+                message=("Requested deal id(s) are not present in this tenant: " +
+                         ", ".join(absent) + ". No Activity was read or written; "
+                         "check that the credential and deal ids belong to the same tenant."),
+            )
+
     # The company's day, not the server's or the laptop's (item 5.2).
     context_notes: list[str] = []
     now, tz_name, currency_symbol = await checks.load_company_clock(

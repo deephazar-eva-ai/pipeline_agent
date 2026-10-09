@@ -10,6 +10,7 @@ from pipeline_agent.agent.contract import (
     AgentRequest,
     ContactStatus,
     ExecutionMode,
+    RefusalResult,
 )
 from pipeline_agent.agent.workflow import (
     ActivityIndex,
@@ -17,7 +18,7 @@ from pipeline_agent.agent.workflow import (
     load_activity_index,
     run_canonical_task,
 )
-from pipeline_agent.harness.loop import run_loop
+from pipeline_agent.harness.loop import call_shape_error, run_loop
 from pipeline_agent.mcp.client import MCPClient, MCPToolError
 from pipeline_agent.mcp.stub_client import StubMCPClient
 from pipeline_agent.preflight import run_preflight
@@ -34,7 +35,7 @@ from .test_guard_regressions import NOW, Pages
     ],
 )
 def test_requested_deal_that_is_not_a_candidate_is_reported(deal_id):
-    answer = asyncio.run(
+    result = asyncio.run(
         run_canonical_task(
             StubMCPClient(),
             AgentRequest(
@@ -45,8 +46,59 @@ def test_requested_deal_that_is_not_a_candidate_is_reported(deal_id):
         )
     )
 
+    assert isinstance(result, RefusalResult)
+    assert "not present in this tenant" in result.message
+
+
+def test_requested_deal_in_this_tenant_but_not_a_candidate_is_reported():
+    answer = asyncio.run(
+        run_canonical_task(
+            StubMCPClient(),
+            AgentRequest(text="x", deal_ids=["stub-deal-fresh"]),
+            run_id="scope-known",
+        )
+    )
+
+    assert not isinstance(answer, RefusalResult)
     assert not answer.deals
     assert "requested deal(s) not among" in answer.summary
+
+
+def test_loop_blocks_unavailable_or_malformed_calls_before_the_api():
+    replies = iter([
+        '{"action":"call_tool","tool":"get_schema","arguments":{"entity":"Activity"}}',
+        '{"action":"call_tool","tool":"get","arguments":{}}',
+        '{"action":"call_tool","tool":"create","arguments":{"entity":"Activity","data":{}}}',
+        '{"action":"done","claimed_success":false,"answer":{}}',
+    ])
+
+    async def llm(*_):
+        return next(replies)
+
+    result = asyncio.run(run_loop(
+        {"id": "bad-call-shapes", "prompt": "x"}, StubMCPClient(), llm, "fake", max_steps=4,
+    ))
+
+    blocked = [step.detail for step in result.steps if step.kind == "refused"]
+    assert result.ended == "done"
+    assert any("get_schema" in detail and "unavailable" in detail for detail in blocked)
+    assert any("get requires a non-empty" in detail for detail in blocked)
+    assert any("Activity.create data is missing" in detail for detail in blocked)
+
+
+def test_activity_call_shape_rejects_live_failure_forms_before_the_api():
+    assert "JSON boolean" in call_shape_error(
+        "create", {"entity": "Activity", "data": {"subject": "x", "done": 1}},
+        derived_tools=False,
+    )
+    assert "unsupported field" in call_shape_error(
+        "create", {"entity": "Activity", "data": {"subject": "x", "duration": 30}},
+        derived_tools=False,
+    )
+    assert "server UTC date" in call_shape_error(
+        "create", {"entity": "Activity", "data": {"subject": "x", "due_date": "2000-01-01"}},
+        derived_tools=False,
+    )
 
 
 @pytest.mark.parametrize(
