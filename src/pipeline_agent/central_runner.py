@@ -83,13 +83,15 @@ SECRET_ENV = ("AGENTSWITCH_TOKEN", "OPENAI_API_KEY", "AGENTSWITCH_BASE_URL", "OP
 
 WRITE_TOOLS = {"create", "update", "delete", "transition", "make_from", "bulk_update"}
 
-# Per-task time limits in seconds. They add up to well under the evaluator's
-# 20-minute timeout, which leaves room for the install and for the
+# Per-task time limits in seconds. They add up to about 23 minutes, under the
+# 30-minute timeout_minutes, which leaves room for the install and for the
 # transport's own request timeout if a call gets cancelled mid-flight.
+# LOOP_TIMEOUT is sized from the 2026-10-07 live loop runs: most finished in
+# 140-840s, so 420s would have cut off about half of them.
 PREFLIGHT_TIMEOUT = 120
 CANONICAL_TIMEOUT = 240
 MODEL_TIMEOUT = 120
-LOOP_TIMEOUT = 420
+LOOP_TIMEOUT = 900
 REFUSAL_TIMEOUT = 10
 SKIPPED_TIMEOUT = 5
 

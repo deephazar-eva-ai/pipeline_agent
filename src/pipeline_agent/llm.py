@@ -187,12 +187,23 @@ def _chat_completions_backend(model: str, url: str, key: str) -> LLMCallable:
             raise LLMConfigError(f"HTTP {exc.code} from {url}: {detail[:300]}") from exc
 
     async def call(prompt: str, system: str) -> str:
-        body = await asyncio.to_thread(post_blocking, {
+        payload = {
             "model": model,
             "max_tokens": MAX_TOKENS,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": prompt}],
-        })
+        }
+        try:
+            body = await asyncio.to_thread(post_blocking, payload)
+        except LLMConfigError as exc:
+            # MAX_TOKENS is sized for thinking models; a server whose model has
+            # a smaller output limit rejects it with a 400. Retry once and let
+            # the server apply its own default.
+            text = str(exc).lower()
+            if not (text.startswith("http 400") and ("max_tokens" in text or "token" in text)):
+                raise
+            payload.pop("max_tokens")
+            body = await asyncio.to_thread(post_blocking, payload)
         usage = body.get("usage") or {}
         call.last_usage = {"input_tokens": usage.get("prompt_tokens") or 0,
                            "output_tokens": usage.get("completion_tokens") or 0}
