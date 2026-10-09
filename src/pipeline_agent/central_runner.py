@@ -242,16 +242,21 @@ async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult
 
     writes = find_writes(run.steps)
     wrote_anything = writes or run.created_record_ids or run.updated_record_ids
+    # Only successful calls are recorded as tool_call, so zero means the answer
+    # was not grounded in anything read from the CRM (e.g. MCP unreachable).
+    reads = len(tool_calls(run.steps))
 
     evidence = (
         f"ended={run.ended}; model calls={run.calls}; "
-        f"tool steps={len(tool_calls(run.steps))}; writes={len(writes)}; "
+        f"tool steps={reads}; writes={len(writes)}; "
         f"created={len(run.created_record_ids)}; updated={len(run.updated_record_ids)}; "
         f"unsupported figures={len(run.unsupported_figures)}"
     )
     if run.error:
         evidence += f"; error={run.error[:150]}"
-    return run.ended == "done" and not wrote_anything, evidence
+    if reads == 0:
+        evidence += "; no successful tool call, so the answer is not grounded"
+    return run.ended == "done" and reads >= 1 and not wrote_anything, evidence
 
 
 async def check_refusals() -> TaskResult:
