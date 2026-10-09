@@ -186,3 +186,28 @@ IT-01-specific behavior. The D16 adversary can then wait for the first
   Activity `done` values, stale server-date Activity writes, and unsupported
   Activity-create fields. These are offline fixes only: a new, cleaned live
   run is still required before any IT-01 gate can be marked passed.
+
+## Quick reference: next course of action
+
+The remediation was committed and pushed as `7904b1f` (`main`); the offline
+suite passed (`304 passed`). Do not reuse `20261009T055144IST`: it is retained
+as failed historical evidence and has already been cleaned up.
+
+1. Announce a new Keystone shared-book test window and set a **new**
+   `IT01_RUN_DIR`. Export the Keystone MCP settings and confirm a non-empty
+   `OPENROUTER_API_KEY`; never store either token or key in this repository.
+2. Run `S0`, `seed`, and `S1`; preserve the generated `fixtures.json` only in
+   the ignored run directory.
+3. Run A and snapshot `S2`; run B, review its proposals, then record real
+   human approval before starting Run C.
+4. Run C and snapshot `S3`; run D and `S4`; run E and `S5`; then switch only
+   the shell credentials to Suryodaya for Run F and capture both S6 snapshots.
+5. Run `verify` before cleanup. Required live gates include C-W1 (exactly D3,
+   D9a, and D14 created in Run C), C-W6 (Run D's Activity diff is empty), and
+   C-W8 (Suryodaya refuses Keystone IDs with `claimed_success=false`).
+6. Run cleanup and `S7` whether verification passes or fails. Confirm all
+   tagged fixture Activities are closed, fixture Deals are `closed_lost`, and
+   the fixture quotation is declined.
+7. Only after a passing verifier and cleanup confirmation, add a sanitized
+   outcome summary to this plan and request instructor review. Do not commit
+   raw `runs/` artifacts, CRM IDs, credentials, or tokens.
