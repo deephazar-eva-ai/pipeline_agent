@@ -186,6 +186,31 @@ IT-01-specific behavior. The D16 adversary can then wait for the first
   Activity `done` values, stale server-date Activity writes, and unsupported
   Activity-create fields. These are offline fixes only: a new, cleaned live
   run is still required before any IT-01 gate can be marked passed.
+- **2026-10-10/11, Run 2 `20261010T181555IST-run2` on `3394506`:** run per
+  [`IT-01_IMPLEMENTATION_PLAN_RUN2.md`](IT-01_IMPLEMENTATION_PLAN_RUN2.md),
+  with both sessions on company date 2026-10-10. The morning session (Sat
+  18:15 IST) did preflight, baseline, seed, morning Run A and S2-morning. The
+  evening session (Sun 05:30–06:40 IST) did evening Run A, Run B, human
+  approval, Runs C–F, verify, cleanup and S7. The verifier passed its 4
+  automatic checks.
+- **Run 2 manual review: failed.** All write checks pass (C-W1–C-W4,
+  C-W6–C-W9; C-W5 reported). Reading fails exactly as design-doc §7
+  predicted: G-A (D4), G-B/G-C (D2 in both windows, D1 in the evening), and
+  G-D/G-E (D6, PB, D7). Unpredicted: C-R5 in the loop (D12 never mentioned)
+  and C-R6 (mismatched links counted, not named). C-H2 scoring and C-R7's PD
+  expectation are waiting for instructor consent. Full record:
+  [`docs/integration_testing_pipeline_run2.md`](../docs/integration_testing_pipeline_run2.md);
+  design doc §9.2.
+- **Run 2 cleanup:** `it01.py cleanup` closed the fixture Activities and
+  deals and declined the quote, but not the agent's own Run C writes. Five
+  agent Activities were closed by hand over MCP (3 from Run 2, 2 left over
+  from Run 1). `S7-final2` shows no open IT-01 Activity; D11 alone remains
+  open, waiting for admin cleanup (PB2).
+- **2026-10-11, post-run fixes (offline):** branch `it01-run3-fixes`
+  (`529f7c4` code, `c0e7696` tests, 318 passed) fixes G-A to G-E, C-R5/C-R6
+  and G-G. A replay of Run 2's S2 snapshot through the fixed code matches
+  C-R1 in both windows. It is not a gate result: Run 3 must repeat IT-01 in
+  full, after cleanup is extended to the agent's own writes.
 
 ## Quick reference: next course of action
 

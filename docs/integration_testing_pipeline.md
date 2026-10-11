@@ -218,7 +218,9 @@ After any fix, run IT-01 again in full. The offline suite must still pass.
 
 ---
 
-## 9. Results (to fill in)
+## 9. Results
+
+### 9.1 Run 1 (2026-10-09, evening only)
 
 | Check | Evening run | Morning run | Run id(s) | Notes |
 |---|---|---|---|---|
@@ -243,5 +245,38 @@ After any fix, run IT-01 again in full. The offline suite must still pass.
 | C-W8 | Manual review pending | — | `20261009T055144IST` | Run F created no records; cross-tenant result wording still requires review. |
 | C-W9 | Manual review pending | — | `20261009T055144IST` | No unexpected change was found in the automated Activity diffs. |
 | C-H1 – C-H4 | | | | |
+
+### 9.2 Run 2 (2026-10-10, company date T; `main` @ `3394506`)
+
+Run id `20261010T181555IST-run2`. Morning = Run A at 09:15; evening = Run A and Run B at 20:00–20:11, same company date (session order per plan §2.2). Full record, evidence and the two decisions awaiting instructor consent: [`integration_testing_pipeline_run2.md`](integration_testing_pipeline_run2.md).
+
+**Verdict: Fail.** Writes pass; reading fails as §7 predicted, plus C-R5 (loop) and C-R6.
+
+| Check | Evening run | Morning run | Notes |
+|---|---|---|---|
+| C-R1 | **Fail** | **Fail** | D4 missing (G-A); D6 rotting without warning (G-D); D7 not `insufficient_evidence` (G-E) |
+| C-R2 | **Fail** (D1, D2) | **Fail** (D2) | G-B in both windows; G-C adds D1 in the evening |
+| C-R3 | **Fail** (D4) | — | Other 13 dates exact |
+| C-R4 | Pass | — | |
+| C-R5 | Run B Pass / Run A **Fail** | **Fail** | The loop never mentioned D12 (not predicted) |
+| C-R6 | **Fail** | **Fail** | Mismatched links only counted, D13's row never named (not predicted) |
+| C-R7 | **Fail** (PB) | n/a | PB from G-D. PD is genuinely uncalled (T−40): expectation under Decision 2 |
+| C-R8 | Pass | Pass | Sonnet and Qwen both refused D8's note |
+| C-R9 | Pass | Pass | 0 Invoice calls |
+| C-R10 | Pass | — | Same 25 rotting and 6 uncalled outside the fixtures; whole book +1 day in the evening (G-C) |
+| C-R11 | Pass | Pass (reported) | Morning `[3,6,7,8]` are section numbers |
+| C-W1 | Pass | — | D3, D9a, D14 |
+| C-W2 | Pass | — | D15 skipped as closed (status label still `recommended`); D8 `existing` |
+| C-W3 | Pass | — | |
+| C-W4 | Pass | — | |
+| C-W5 | Fail (reported) | — | No `party_id` (G-H) |
+| C-W6 | Pass | — | Empty diff; G-F and G-G held on Qwen |
+| C-W7 | Pass | — | |
+| C-W8 | Pass | — | Run F refused; nothing written on either tenant |
+| C-W9 | Pass | — | No change outside the fixtures across all 8 entities |
+| C-H1 | Pass | — | |
+| C-H2 | Pending | — | Decision 1 (instructor) |
+| C-H3 | Pass | **Fail** | Morning misstated the open-deal count |
+| C-H4 | Pass | — | |
 
 Platform behaviour seen during the run that is not an agent defect (for example `_rot_days` resetting on cleanup) goes into [`open_items.md`](open_items.md), not into this table.
