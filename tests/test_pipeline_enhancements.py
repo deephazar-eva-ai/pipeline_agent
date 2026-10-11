@@ -1,10 +1,10 @@
-"""Tests for aggregate, contact_status, request splitting, figure checking,
-and the agent loop's duplicate and repeat-read guards.
+"""
+Tests for aggregate, contact_status, request splitting, figure checking and
+the agent loop's duplicate / repeat-read guards.
 
-Everything runs against in-memory clients, so results don't depend on what
+All of these run against in-memory clients so they don't depend on whatever
 happens to be in a live CRM.
 """
-
 import asyncio
 import datetime as dt
 import json
@@ -12,33 +12,21 @@ import json
 import pytest
 
 from pipeline_agent.agent import aggregate, contact_status
-from pipeline_agent.agent.contract import (
-    ActionStatus,
-    CanonicalAnswer,
-    DealResult,
-    UncalledParty,
-)
+from pipeline_agent.agent.contract import ActionStatus, CanonicalAnswer, DealResult, UncalledParty
 from pipeline_agent.agent.pipeline_checks import PipelineContext
 from pipeline_agent.agent.request_guard import split_request
 from pipeline_agent.agent.workflow import ActivityIndex
-from pipeline_agent.harness.loop import (
-    WritePolicy,
-    open_activity_duplicate,
-    run_loop,
-    unsupported_figures,
-)
+from pipeline_agent.harness.loop import WritePolicy, open_activity_duplicate, run_loop, unsupported_figures
 from pipeline_agent.mcp.client import MCPClient
 from pipeline_agent.mcp.stub_client import StubMCPClient
-
 
 NOW = dt.datetime(2026, 10, 7, 12, tzinfo=dt.timezone.utc)
 
 
-# --- helpers -----------------------------------------------------------------
-
+# --- test doubles and helpers -------------------------------------------------
 
 class RecordsClient(MCPClient):
-    """In-memory client that supports get, filtered list and offset/limit paging."""
+    """In-memory client: get by id, list with equality filters and offset/limit paging."""
 
     def __init__(self, records):
         self.records = list(records)
@@ -46,25 +34,26 @@ class RecordsClient(MCPClient):
 
     async def call_tool(self, name, arguments):
         self.calls.append((name, dict(arguments)))
+
         if name == "get":
-            return next(row for row in self.records if row["id"] == arguments["id"])
+            return next(r for r in self.records if r["id"] == arguments["id"])
 
         assert name == "list"
         rows = list(self.records)
         for field, wanted in (arguments.get("filters") or {}).items():
-            rows = [row for row in rows if row.get(field) == wanted]
+            rows = [r for r in rows if r.get(field) == wanted]
         offset = arguments.get("offset", 0)
         limit = arguments.get("limit", 20)
         return {"records": rows[offset:offset + limit], "total": len(rows)}
 
 
 class NoTotalRecordsClient(RecordsClient):
-    """Same as RecordsClient but list responses omit ``total``."""
+    """Like RecordsClient, but list responses don't include `total`."""
 
     async def call_tool(self, name, arguments):
         result = await super().call_tool(name, arguments)
         if name == "list":
-            result.pop("total")
+            del result["total"]
         return result
 
 
@@ -72,12 +61,18 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def returns(value):
+    """Async stand-in for a loader that always returns `value`."""
+    async def fake(*_args, **_kwargs):
+        return value
+    return fake
+
+
 def scripted_llm(*replies):
     replies = iter(replies)
 
     async def llm(prompt, system):
         return next(replies)
-
     return llm
 
 
@@ -89,26 +84,35 @@ def done(answer):
     return json.dumps({"action": "done", "claimed_success": True, "answer": answer})
 
 
-def returns(value):
-    """Async stand-in for a loader that always returns ``value``."""
+def run_agent(task_id, prompt, client, replies, max_steps, run_id=None, write_policy=None):
+    """Run the agent loop with a scripted model and derived tools off."""
+    task = {"id": task_id, "prompt": prompt}
+    if run_id:
+        task["run_id"] = run_id
+    kwargs = {"max_steps": max_steps, "derived_tools": False}
+    if write_policy is not None:
+        kwargs["write_policy"] = write_policy
+    return run(run_loop(task, client, scripted_llm(*replies), "test", **kwargs))
 
-    async def fake(*_args, **_kwargs):
-        return value
 
-    return fake
+def activity_policy(run_id, deal_ids=None):
+    """Allow a single Activity write, optionally restricted to some deals."""
+    if deal_ids is None:
+        return WritePolicy(entities=frozenset({"Activity"}), max_writes=1, run_id=run_id)
+    return WritePolicy(entities=frozenset({"Activity"}), deal_ids=frozenset(deal_ids),
+                       max_writes=1, run_id=run_id)
 
 
 def refusals(loop_run):
     return [step.detail for step in loop_run.steps if step.kind == "refused"]
 
 
-# --- aggregate ---------------------------------------------------------------
-
+# --- aggregate ----------------------------------------------------------------
 
 class TestAggregate:
     @pytest.fixture
     def client(self):
-        # One full page of open deals plus one closed deal on the second page.
+        # A full page of open deals, then one won deal that lands on page two.
         open_deals = [
             {"id": f"open-{n}", "stage": "new", "currency": "USD", "value": 7}
             for n in range(aggregate.PAGE_SIZE)
@@ -128,21 +132,19 @@ class TestAggregate:
         assert result["records_read"] == aggregate.PAGE_SIZE + 1
         assert result["records_used"] == aggregate.PAGE_SIZE
         assert result["overall"]["sum_value"] == 7000
-        assert result["groups"] == [
-            {"key": "new", "count": aggregate.PAGE_SIZE, "sum_value": 7000},
-        ]
+        assert result["groups"] == [{"key": "new", "count": aggregate.PAGE_SIZE, "sum_value": 7000}]
         assert client.calls[0][1]["limit"] == aggregate.PAGE_SIZE
         assert client.calls[1][1]["offset"] == aggregate.PAGE_SIZE
 
     def test_second_call_reuses_cached_records(self, client):
         cache = {}
-        run(aggregate.aggregate(client, {"entity": "Deal", "group_by": "stage", "sum": "value",
-                                         "open_only": True}, cache=cache))
+        first_args = {"entity": "Deal", "group_by": "stage", "sum": "value", "open_only": True}
+        run(aggregate.aggregate(client, first_args, cache=cache))
 
         result = run(aggregate.aggregate(client, {"entity": "Deal", "sum": "value"}, cache=cache))
 
         assert result["overall"]["sum_value"] == 7100
-        assert len(client.calls) == 2  # only the two pages from the first call
+        assert len(client.calls) == 2  # just the two pages from the first call
 
     def test_open_only_on_non_deal_errors_without_reading(self):
         client = RecordsClient([])
@@ -154,7 +156,7 @@ class TestAggregate:
 
 
 class TestAggregateWithoutTotal:
-    """62 western deals (one with a bad value, mixed currencies) and one eastern deal."""
+    # 62 west deals (deal 0 has a junk value, currencies alternate) plus one east deal.
 
     @pytest.fixture
     def client(self):
@@ -175,7 +177,7 @@ class TestAggregateWithoutTotal:
     def result(self, client):
         return run(aggregate.aggregate(client, {
             "entity": "Deal",
-            "region": "east",  # top-level keys aren't filters; only `filters` is
+            "region": "east",  # stray top-level key; only `filters` should filter
             "filters": {"region": "west"},
             "group_by": "bucket",
             "sum": "value",
@@ -201,8 +203,7 @@ class TestAggregateWithoutTotal:
         assert "only the 60 largest" in result["note"]
 
 
-# --- contact_status.view -----------------------------------------------------
-
+# --- contact_status.view ------------------------------------------------------
 
 @pytest.fixture
 def analysis():
@@ -227,17 +228,34 @@ def test_view_summary_pages_deals(analysis):
 
 
 def test_view_filters_rotting_deals_by_contact_rule(analysis):
-    result = contact_status.view(
-        analysis, {"section": "deals", "rotting_only": True, "rule": "contact"},
-    )
+    result = contact_status.view(analysis, {"section": "deals", "rotting_only": True, "rule": "contact"})
 
-    assert [row["deal_id"] for row in result["records"]] == ["contact"]
+    assert [r["deal_id"] for r in result["records"]] == ["contact"]
 
 
 def test_view_filters_data_issues_by_code(analysis):
     result = contact_status.view(analysis, {"section": "data_issues", "code": "bad_stage"})
 
     assert result["total"] == 1
+
+
+@pytest.mark.parametrize("arguments", [
+    {},
+    {"section": "deals"},
+    {"section": "data_issues"},
+    {"section": "late_orders"},
+    {"section": "uncalled"},
+])
+def test_view_includes_must_report_in_every_section(analysis, arguments):
+    analysis["must_report"] = [
+        "Supplier-only deal: excluded from both answers - supplier-side",
+        "Northstar renewal: activity_linked_to_other_customers_deal - "
+        "activity 'Call' has party Northstar but its deal belongs to Acme",
+    ]
+
+    result = contact_status.view(analysis, arguments)
+
+    assert result["must_report"] == analysis["must_report"]
 
 
 def test_contact_status_analyses_once_per_cache(monkeypatch):
@@ -266,10 +284,9 @@ def test_contact_status_analyses_once_per_cache(monkeypatch):
     assert second["records"] == [{"deal_id": "one", "rotting": False}]
 
 
-# --- contact_status on a large book ------------------------------------------
+# --- contact_status on a book bigger than one page ----------------------------
 
-
-BOOK_SIZE = 61  # more than one page
+BOOK_SIZE = 61
 
 
 def make_deals():
@@ -278,6 +295,7 @@ def make_deals():
             "id": f"deal-{n}",
             "title": f"Deal {n}",
             "party_id": f"party-{n}",
+            # deal-0's stage isn't in the sales pipeline
             "stage": "undefined" if n == 0 else "qualification",
             "pipeline": "sales",
             "value": n + 1,
@@ -307,38 +325,38 @@ def make_answer(deals):
         )
         for n, deal in enumerate(deals)
     ]
+    data_issues = [
+        {"code": "seeded_issue", "deal_id": d["id"], "deal": d["title"], "detail": "fixture"}
+        for d in deals
+    ]
+    late_orders = [
+        {"party": d["party_id"], "order": f"SO-{n}", "delivery_date": "2026-09-01",
+         "days_late": 36, "open_deal_ids": [d["id"]]}
+        for n, d in enumerate(deals)
+    ]
+    uncalled = [
+        UncalledParty(d["party_id"], f"Party {n}", None, None, [d["id"]], d["value"])
+        for n, d in enumerate(deals)
+    ]
     return CanonicalAnswer(
-        30,
-        NOW.isoformat(),
-        results,
-        "synthetic analysis",
+        30, NOW.isoformat(), results, "synthetic analysis",
         candidates_found=len(results),
-        data_issues=[
-            {"code": "seeded_issue", "deal_id": d["id"], "deal": d["title"], "detail": "fixture"}
-            for d in deals
-        ],
-        late_orders=[
-            {"party": d["party_id"], "order": f"SO-{n}", "delivery_date": "2026-09-01",
-             "days_late": 36, "open_deal_ids": [d["id"]]}
-            for n, d in enumerate(deals)
-        ],
-        uncalled=[
-            UncalledParty(d["party_id"], f"Party {n}", None, None, [d["id"]], d["value"])
-            for n, d in enumerate(deals)
-        ],
+        data_issues=data_issues,
+        late_orders=late_orders,
+        uncalled=uncalled,
     )
 
 
 @pytest.fixture
 def large_book(monkeypatch):
-    """Patch contact_status's loaders with a 61-deal book.
+    """
+    Point contact_status's loaders at a 61-deal book.
 
-    deal-0 has a stage that isn't in its pipeline, an activity linked to the
-    wrong customer, and a quote that turned into a sales order.
-    Returns the list of canonical-task calls so tests can count them.
+    deal-0 also has an activity linked to the wrong customer and a quote that
+    became a sales order. Returns the list of canonical-task calls so a test
+    can count them.
     """
     deals = make_deals()
-    answer = make_answer(deals)
     index = ActivityIndex(
         contact_dates_indexed=True,
         mismatched_links=[{
@@ -361,6 +379,8 @@ def large_book(monkeypatch):
             "delivered_status": "undelivered",
         }],
     )
+
+    answer = make_answer(deals)
     canonical_calls = []
 
     async def fake_canonical(*_args, **_kwargs):
@@ -368,9 +388,9 @@ def large_book(monkeypatch):
         return answer
 
     monkeypatch.setattr(contact_status, "run_canonical_task", fake_canonical)
-    monkeypatch.setattr(contact_status.checks, "load_company_clock", returns((NOW, "UTC", "$")))
     monkeypatch.setattr(contact_status, "load_deals", returns(deals))
     monkeypatch.setattr(contact_status, "load_activity_index", returns(index))
+    monkeypatch.setattr(contact_status.checks, "load_company_clock", returns((NOW, "UTC", "$")))
     monkeypatch.setattr(contact_status.checks, "load_context", returns(context))
     return canonical_calls
 
@@ -394,17 +414,17 @@ class TestContactStatusLargeBook:
         summary = self.status(cache)
 
         assert summary["deals_page"]["total"] == BOOK_SIZE
-        first_deal = summary["deals_page"]["records"][0]
-        assert first_deal["quotes"][0]["number"] == "Q-0"
-        assert first_deal["orders"][0]["number"] == "SO-0"
-        assert first_deal["customer_late_orders"] == 1
+        deal_0 = summary["deals_page"]["records"][0]
+        assert deal_0["quotes"][0]["number"] == "Q-0"
+        assert deal_0["orders"][0]["number"] == "SO-0"
+        assert deal_0["customer_late_orders"] == 1
 
     def test_data_issues_include_derived_checks(self, large_book, cache):
         issues = self.status(cache, {"section": "data_issues", "offset": 30, "limit": 60})
 
-        # 61 seeded issues + stage-not-in-pipeline + mismatched activity link
+        # 61 seeded issues, plus the bad stage and the mismatched activity on deal-0
         assert issues["total"] == 63
-        codes = {row["code"] for row in issues["records"]}
+        codes = {r["code"] for r in issues["records"]}
         assert "stage_not_in_pipeline" in codes
         assert "activity_linked_to_other_customers_deal" in codes
 
@@ -416,8 +436,7 @@ class TestContactStatusLargeBook:
         assert page["returned"] == 31
 
 
-# --- duplicate guard ---------------------------------------------------------
-
+# --- duplicate guard ----------------------------------------------------------
 
 class TestOpenActivityDuplicate:
     @pytest.fixture
@@ -440,105 +459,101 @@ class TestOpenActivityDuplicate:
             "subject": "Customer follow-up", "due_date": "2026-10-08",
         }])
 
-        message = run(open_activity_duplicate(
-            client, {"entity": "Activity", "data": {"party_id": "party-1"}},
-        ))
+        message = run(open_activity_duplicate(client, {"entity": "Activity", "data": {"party_id": "party-1"}}))
 
         assert "customer already has an open Activity" in message
 
     def test_allows_logging_a_completed_contact(self, deal_activity_client):
         message = run(open_activity_duplicate(
-            deal_activity_client,
-            {"entity": "Activity", "data": {"deal_id": "deal-1", "done": True}},
+            deal_activity_client, {"entity": "Activity", "data": {"deal_id": "deal-1", "done": True}},
         ))
 
         assert message is None
 
 
-# --- agent loop guards -------------------------------------------------------
-
+# --- agent loop guards --------------------------------------------------------
 
 def test_loop_does_not_repeat_identical_read():
-    llm = scripted_llm(
-        tool_call("list", entity="Deal"),
-        tool_call("list", entity="Deal"),
-        done({"deals": 6}),
+    result = run_agent(
+        "repeat-read", "List deals.", StubMCPClient(),
+        [tool_call("list", entity="Deal"), tool_call("list", entity="Deal"), done({"deals": 6})],
+        max_steps=3,
     )
-
-    result = run(run_loop({"id": "repeat-read", "prompt": "List deals."}, StubMCPClient(),
-                          llm, "test", max_steps=3, derived_tools=False))
 
     assert result.ended == "done"
-    assert [step.kind for step in result.steps].count("tool_call") == 1
-    assert any("repeat-read guard" in detail for detail in refusals(result))
+    assert [s.kind for s in result.steps].count("tool_call") == 1
+    assert any("repeat-read guard" in d for d in refusals(result))
 
 
-def test_loop_can_emit_low_detail_live_events(tmp_path, monkeypatch):
+def test_loop_writes_low_detail_event_log(tmp_path, monkeypatch):
     event_log = tmp_path / "nested" / "events.jsonl"
     monkeypatch.setenv("PIPELINE_EVENT_LOG", str(event_log))
-    llm = scripted_llm(
-        tool_call("list", entity="Deal"),
-        done({"deals": 4}),
-    )
 
-    result = run(run_loop(
-        {"id": "event-test", "prompt": "List deals.", "run_id": "run-42"},
-        StubMCPClient(), llm, "test", max_steps=2, derived_tools=False,
-    ))
+    result = run_agent(
+        "event-test", "List deals.", StubMCPClient(),
+        [tool_call("list", entity="Deal"), done({"deals": 4})],
+        max_steps=2, run_id="run-42",
+    )
 
     events = [json.loads(line) for line in event_log.read_text().splitlines()]
     assert result.ended == "done"
-    assert [event["event"] for event in events] == [
-        "run_started", "tool_finished", "run_finished",
-    ]
-    assert events[1]["tool"] == "list"
-    assert events[1]["entity"] == "Deal"
-    assert events[1]["outcome"] == "success"
-    assert events[1]["run_id"] == "run-42"
-    assert "arguments" not in events[1]
-    assert "result" not in events[1]
+    assert [e["event"] for e in events] == ["run_started", "tool_finished", "run_finished"]
+
+    tool_event = events[1]
+    assert tool_event["tool"] == "list"
+    assert tool_event["entity"] == "Deal"
+    assert tool_event["outcome"] == "success"
+    assert tool_event["run_id"] == "run-42"
+    # Arguments and results must never reach the event log.
+    assert "arguments" not in tool_event
+    assert "result" not in tool_event
 
 
 def test_loop_blocks_duplicate_create_before_calling_client():
     client = StubMCPClient()
-    llm = scripted_llm(
-        tool_call("create", entity="Activity", data={
-            "deal_id": "stub-deal-existing", "subject": "Duplicate", "done": False,
-        }),
-        done("blocked"),
-    )
-    policy = WritePolicy(entities=frozenset({"Activity"}), max_writes=1, run_id="case")
+    create = tool_call("create", entity="Activity", data={
+        "deal_id": "stub-deal-existing", "subject": "Duplicate", "done": False,
+    })
 
-    result = run(run_loop(
-        {"id": "duplicate-create", "prompt": "Create a follow-up.", "run_id": "case"},
-        client, llm, "test", max_steps=2, write_policy=policy, derived_tools=False,
-    ))
+    result = run_agent(
+        "duplicate-create", "Create a follow-up.", client, [create, done("blocked")],
+        max_steps=2, run_id="case", write_policy=activity_policy("case"),
+    )
 
     assert result.created_record_ids == []
     assert client.created_records == []
-    assert any("duplicate guard" in detail for detail in refusals(result))
+    assert any("duplicate guard" in d for d in refusals(result))
+
+
+def test_loop_refuses_to_create_completed_activity():
+    client = StubMCPClient()
+    create = tool_call("create", entity="Activity", data={
+        "deal_id": "stub-deal-needs-action", "subject": "Call logged today", "done": True, "type": "call",
+    })
+    policy = activity_policy("completed-call", deal_ids={"stub-deal-needs-action"})
+
+    result = run_agent(
+        "completed-create", "Create a completed call.", client, [create, done("blocked")],
+        max_steps=2, run_id="completed-call", write_policy=policy,
+    )
+
+    assert result.created_record_ids == []
+    assert client.created_records == []
+    assert any("may not create a completed Activity" in d for d in refusals(result))
 
 
 def test_loop_write_stamps_provenance_and_blocks_second_create():
     client = StubMCPClient()
-    policy = WritePolicy(
-        entities=frozenset({"Activity"}),
-        deal_ids=frozenset({"stub-deal-needs-action"}),
-        max_writes=1,
-        run_id="write-case",
-    )
+    policy = activity_policy("write-case", deal_ids={"stub-deal-needs-action"})
 
     def create_follow_up():
-        llm = scripted_llm(
-            tool_call("create", entity="Activity", data={
-                "deal_id": "stub-deal-needs-action", "subject": "Follow up", "done": False,
-            }),
-            done("created"),
+        create = tool_call("create", entity="Activity", data={
+            "deal_id": "stub-deal-needs-action", "subject": "Follow up", "done": False,
+        })
+        return run_agent(
+            "write-stub", "Create a follow-up.", client, [create, done("created")],
+            max_steps=2, run_id="write-case", write_policy=policy,
         )
-        return run(run_loop(
-            {"id": "write-stub", "prompt": "Create a follow-up.", "run_id": "write-case"},
-            client, llm, "test", max_steps=2, write_policy=policy, derived_tools=False,
-        ))
 
     first = create_follow_up()
     second = create_follow_up()
@@ -547,12 +562,12 @@ def test_loop_write_stamps_provenance_and_blocks_second_create():
     assert len(client.created_records) == 1
     description = client.created_records[0]["record"]["description"]
     assert "created_by=pipeline_agent run=write-case" in description
+
     assert second.created_record_ids == []
-    assert any("duplicate guard" in detail for detail in refusals(second))
+    assert any("duplicate guard" in d for d in refusals(second))
 
 
-# --- request splitting and figure checks -------------------------------------
-
+# --- request splitting and figure checks --------------------------------------
 
 def test_split_request_keeps_in_scope_part_for_data_refusal():
     result = split_request("List rotting deals and their unpaid invoices.")
