@@ -159,6 +159,10 @@ class CanonicalAnswer:
     # unvalued, no contact, unknown owner, won-but-still-prospect, expired
     # quote, overdue plan milestone, dead deal.
     data_issues: list[dict[str, Any]] = field(default_factory=list)
+    # Activities whose deal belongs to a different customer than the row's own
+    # party (PB3/P2). Not counted as contact for either; listed one per row so
+    # a person can fix the link (C-R6: a count alone named no record).
+    mismatched_links: list[dict[str, Any]] = field(default_factory=list)
     # Qualified leads with no deal, leads whose next_action date has passed,
     # and leads never contacted.
     leads_needing_action: list[dict[str, Any]] = field(default_factory=list)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,6 +46,21 @@ NEXT_ACTION_TYPE = "task"
 # its own bookkeeping into "fresh". Changing this string silently disarms
 # `independent_rot_days`, so it lives here and is referenced, never retyped.
 PROVENANCE_MARKER = "created_by=pipeline_agent"
+
+# The Activity types that are contact with the customer (G-A, IT-01 Run 2,
+# 2026-10-11). A teammate closing a task ("Send brochure: done") is work about
+# the customer, not contact with them; counting it made a deal untouched for
+# 90 days read as contacted today. `lunch` and other types stay out until the
+# team decides otherwise.
+CONTACT_TYPES = frozenset({"call", "meeting", "email"})
+
+
+def is_contact(activity: dict) -> bool:
+    """A completed row of a contact type that was not cancelled. Cancelling a
+    scheduled call marks it done, but nobody spoke to the customer."""
+    if str(activity.get("type") or "").lower() not in CONTACT_TYPES:
+        return False
+    return not str(activity.get("outcome") or "").strip().lower().startswith("cancel")
 
 # Observed `_rot_level` values, measured across all 133 live deals on
 # 2026-09-21: only `fresh`, `attention` and `none` occur. `none` is exactly
@@ -120,6 +136,34 @@ def _parse_ts(value: Any) -> dt.datetime | None:
         return None
     return parsed.replace(tzinfo=dt.timezone.utc) if parsed.tzinfo is None else parsed
 
+
+def local_day(value: Any, now: dt.datetime) -> dt.date | None:
+    """The calendar day of a platform date or timestamp, in `now`'s time zone.
+
+    A plain `YYYY-MM-DD` (Activity.due_date, a reported actual_date) is already
+    a company-local day. A timestamp is UTC when naive (see `_parse_ts`) and is
+    moved into the company's zone before its date is taken."""
+    text = str(value or "")
+    if len(text) <= 10:
+        try:
+            return dt.date.fromisoformat(text)
+        except ValueError:
+            return None
+    ts = _parse_ts(text)
+    if ts is None:
+        return None
+    return (ts.astimezone(now.tzinfo) if now.tzinfo else ts).date()
+
+
+def days_since(now: dt.datetime, value: Any) -> int | None:
+    """Whole calendar days from `value` to today, both in the company's time
+    zone (G-C). Subtracting a contact date read as UTC midnight from an
+    evening `now` in UTC-4 crossed into the next UTC day and read one day too
+    many: in IT-01 Run 2 every deal in the book aged by one between 09:05 and
+    20:11 on the same company date."""
+    day = local_day(value, now)
+    return None if day is None else (now.date() - day).days
+
 # Template only - NOT validated against live Suryodaya stage names yet
 # (capstone_plan.md Phase 2, step 3: "Examples must remain templates until
 # validated against live stages"). Any stage not in this map routes to
@@ -152,6 +196,9 @@ def _positive_days(value: Any) -> int | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return days if days > 0 else None
+
+
+MARKER_RUN = re.compile(re.escape(PROVENANCE_MARKER) + r"\s+run=([^\s;)]+)")
 
 
 def is_agent_authored(activity: dict) -> bool:
@@ -190,19 +237,19 @@ def _rot_age(deal: dict, index: ActivityIndex,
     if not index.contact_dates_indexed:
         days = platform_mirror_days(deal, index, now)
         return days, None if days is None else "legacy"
-    contact = _parse_ts(max((d for d in (index.last_contact_by_deal.get(deal.get("id")),
-                                          index.last_unlinked_contact_by_party.get(
-                                              deal.get("party_id"))) if d), default=None))
+    contact = days_since(now, max((d for d in (index.last_contact_by_deal.get(deal.get("id")),
+                                                index.last_unlinked_contact_by_party.get(
+                                                    deal.get("party_id"))) if d), default=None))
     if contact is not None:
-        return max(0, (now - contact).days), "contact"
+        return max(0, contact), "contact"
     # `created_at` only when there has never been contact. It is not a floor
     # under a contact date: on Keystone it is the seeding timestamp too
     # (2026-09-16) on deals with contact history back to May, and flooring
     # with it masked 9 deals worth $616,838 exactly as `updated_at` had.
-    opened = _parse_ts(deal.get("created_at"))
+    opened = days_since(now, deal.get("created_at"))
     # A `created_at` in the future (clock skew, bad import) reads as opened
     # today, never as a negative age.
-    return (None, None) if opened is None else (max(0, (now - opened).days), "deal_opened")
+    return (None, None) if opened is None else (max(0, opened), "deal_opened")
 
 
 def platform_mirror_days(deal: dict, index: ActivityIndex, now: dt.datetime) -> int | None:
@@ -328,7 +375,11 @@ def assess_rot(deal: dict, index: ActivityIndex, now: dt.datetime,
 
     days, age_basis = _rot_age(deal, index, now)
     platform_flags = _platform_flags(deal)
-    independently_flags = days is not None and days >= boundary
+    # "More than" the configured threshold (G-B): 30 days is not more than 30.
+    # The calibrated platform boundary keeps `>=`, because that is where the
+    # platform's own flag was measured to flip.
+    independently_flags = days is not None and (days > boundary if threshold_days is not None
+                                                else days >= boundary)
     agent_wrote = deal.get("id") in index.agent_written_deals
     mirror = platform_mirror_days(deal, index, now) if agent_wrote else None
     mirror_flags = mirror is not None and mirror >= calibration.boundary_days
@@ -466,6 +517,21 @@ class ActivityIndex:
     # Reported contacts logged after the fact, whose real date differs from
     # due_date (PB1 forbids a past due_date) - item 5.1.
     backdated_contacts: int = 0
+    # Completed rows that are not customer contact (tasks, notes, cancelled
+    # calls) - counted so the summary can say they were left out (G-A).
+    noncontact_done: int = 0
+    # Completed contacts that carry this agent's provenance marker. The agent
+    # never logs a completed contact under that marker (its own contacts use
+    # LOGGED_CONTACT_MARKER), so such a row is either its next action that a
+    # person completed or a pasted copy of the marker. Either way somebody
+    # recorded a contact: it counts, and it is listed as a warning (G-D).
+    marked_contacts: list[dict] = field(default_factory=list)
+    # Completed contacts dated after today, by deal and by party. The date is
+    # impossible, so the contact is real but its date is unknown - the same
+    # INSUFFICIENT_EVIDENCE as an unreadable date (G-E). Dropping the row made
+    # the deal read `never_contacted`.
+    future_contact_by_deal: dict[str, str] = field(default_factory=dict)
+    future_contact_by_party: dict[str, str] = field(default_factory=dict)
 
     def last_called(self, party_id: str | None, deal_ids: list[str]) -> str | None:
         """Latest completed call to this customer, via the party or any of its deals."""
@@ -501,6 +567,10 @@ class ActivityIndex:
                 return self.undated_contact_by_deal[deal_id], "deal"
             if party_id in self.undated_contact_by_party:
                 return self.undated_contact_by_party[party_id], "party"
+            if deal_id in self.future_contact_by_deal:
+                return self.future_contact_by_deal[deal_id], "deal"
+            if party_id in self.future_contact_by_party:
+                return self.future_contact_by_party[party_id], "party"
             return None, "none"
         if deal_id and deal_id in self.last_done_by_deal:
             return self.last_done_by_deal[deal_id], "deal"
@@ -636,17 +706,35 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                     index.last_done_by_deal[deal_id] = due
                 if party_id and due and due > index.last_done_by_party.get(party_id, ""):
                     index.last_done_by_party[party_id] = due
-                # A completed contact that has actually happened: dated, not
-                # in the future, and not the agent's own bookkeeping.
+                # A completed contact that has actually happened: a call,
+                # meeting or email (G-A), dated, and not in the future. The
+                # agent's own bookkeeping is a task or a cancelled row, so the
+                # type test excludes it; a contact-type row carrying the agent's
+                # marker counts, and is listed (G-D).
+                contact = is_contact(activity)
+                if not contact:
+                    index.noncontact_done += 1
+                elif authored_by_agent:
+                    run = MARKER_RUN.search(str(activity.get("description") or ""))
+                    index.marked_contacts.append({
+                        "activity_id": row_id, "subject": activity.get("subject"),
+                        "type": activity.get("type"), "date": str(due or "")[:10],
+                        "deal_id": deal_id, "party_id": party_id,
+                        "marker_run": run.group(1) if run else None})
                 day = _iso_day(due)
                 if due and not day:
                     index.unparseable_dates += 1
-                    if not authored_by_agent:
+                    if contact:
                         if deal_id:
                             index.undated_contact_by_deal.setdefault(deal_id, str(due))
                         elif party_id:
                             index.undated_contact_by_party.setdefault(party_id, str(due))
-                if day and day <= today and not authored_by_agent:
+                if day and day > today and contact:
+                    if deal_id:
+                        index.future_contact_by_deal.setdefault(deal_id, day)
+                    elif party_id:
+                        index.future_contact_by_party.setdefault(party_id, day)
+                if day and day <= today and contact:
                     kind = str(activity.get("type") or "activity")
                     if party_id and not (index.first_contact_by_party.get(party_id, "9999")
                                          <= day):
@@ -695,19 +783,15 @@ def classify_contact(now: dt.datetime, threshold_days: int, last_contacted: str 
     """
     if last_contacted is None:
         return ContactStatus.NEVER_CONTACTED, {"last_contacted": None, "basis": basis}
-    try:
-        last = dt.datetime.fromisoformat(last_contacted.replace("Z", "+00:00"))
-        if last.tzinfo is None:
-            # Activity.due_date is a plain date; `now` is tz-aware, and
-            # subtracting the two would raise rather than misreport.
-            last = last.replace(tzinfo=dt.timezone.utc)
-    except ValueError:
+    # Calendar days in the company's time zone (G-C), not a datetime
+    # difference against UTC midnight.
+    elapsed = days_since(now, last_contacted)
+    if elapsed is None:
         return ContactStatus.INSUFFICIENT_EVIDENCE, {"last_contacted": last_contacted,
                                                        "basis": basis,
                                                        "reason": "unparseable date"}
-    days_since = (now - last).days
-    evidence = {"last_contacted": last_contacted, "days_since": days_since, "basis": basis}
-    if days_since < 0:
+    evidence = {"last_contacted": last_contacted, "days_since": elapsed, "basis": basis}
+    if elapsed < 0:
         # A completed activity dated in the future. Activity has no
         # `completed_at`, so `due_date` is the only date available and it is
         # a scheduling field, not a record of when anyone spoke to anyone.
@@ -719,7 +803,8 @@ def classify_contact(now: dt.datetime, threshold_days: int, last_contacted: str 
         evidence["reason"] = ("completion date is in the future - Activity has no "
                                "completed_at, so the date of contact is unknown")
         return ContactStatus.INSUFFICIENT_EVIDENCE, evidence
-    if days_since >= threshold_days:
+    if elapsed > threshold_days:
+        # "More than" the threshold, as the request says (G-B).
         return ContactStatus.NOT_CONTACTED_SINCE_THRESHOLD, evidence
     return ContactStatus.RECENTLY_CONTACTED, evidence
 
@@ -909,7 +994,8 @@ def relationship_days(party_id: str, party_deals: list[dict], index: ActivityInd
     so an undated customer is never reported as uncalled for 30 days."""
     dates = [index.first_contact_by_party.get(party_id)]
     dates += [index.first_contact_by_deal.get(d.get("id")) for d in party_deals]
-    dates += [_iso_day(d.get("created_at")) for d in party_deals]
+    opened = (local_day(d.get("created_at"), now) for d in party_deals)
+    dates += [day.isoformat() for day in opened if day]
     dates = [d for d in dates if d]
     return max(0, (now.date() - dt.date.fromisoformat(min(dates))).days) if dates else 0
 
@@ -938,10 +1024,12 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
         deal_ids = [d["id"] for d in party_deals]
         last = index.last_called(party_id, deal_ids)
         days = None if last is None else (now.date() - dt.date.fromisoformat(last)).days
-        if days is not None and days < threshold_days:
+        # Uncalled means no call for MORE than the threshold - the same rule
+        # as rot (G-B).
+        if days is not None and days <= threshold_days:
             continue
         age = relationship_days(party_id, party_deals, index, now) if last is None else None
-        if age is not None and age < threshold_days:
+        if age is not None and age <= threshold_days:
             # Never called, but the relationship is younger than the threshold:
             # a customer whose first deal opened today has not gone 30 days
             # without a call. Listing it (as every fresh fixture customer was
@@ -963,6 +1051,49 @@ def find_uncalled(deals: list[dict], index: ActivityIndex, now: dt.datetime,
             open_deal_value=sum(_money(d.get("value")) for d in party_deals)))
     rows.sort(key=lambda r: (r.days_since is not None, -(r.days_since or 0)))
     return rows
+
+
+def contact_evidence_issues(deals: list[dict], index: ActivityIndex) -> list[dict]:
+    """Data issues the Activity scan found in the contact evidence itself, in
+    the `collect_data_issues` row shape, on open deals only.
+
+    `agent_marker_on_completed_contact` (G-D): counted as contact, but a
+    person should confirm who logged it. `insufficient_evidence` (G-E): the
+    deal's only completed contact is dated after today. Both used to be
+    silent - the first dropped a real call, the second read `never_contacted`.
+    """
+    open_deals = [d for d in deals if d.get("id")
+                  and not str(d.get("stage", "")).startswith("closed")]
+    by_id = {d["id"]: d for d in open_deals}
+    by_party: dict[str, list[dict]] = {}
+    for d in open_deals:
+        if d.get("party_id"):
+            by_party.setdefault(d["party_id"], []).append(d)
+    issues: list[dict] = []
+
+    def add(deal: dict, code: str, detail: str) -> None:
+        issues.append({"deal_id": deal.get("id"), "deal": checks.display_title(deal),
+                       "party": deal.get("_party_id_display") or deal.get("party_id"),
+                       "value": _money(deal.get("value")), "code": code, "detail": detail})
+
+    for row in index.marked_contacts:
+        targets = ([by_id[row["deal_id"]]] if row.get("deal_id") in by_id
+                   else [] if row.get("deal_id") else by_party.get(row.get("party_id"), []))
+        for deal in targets:
+            add(deal, "agent_marker_on_completed_contact",
+                f"completed {row.get('type')} '{row.get('subject')}' on {row.get('date')} "
+                f"carries this agent's marker ({PROVENANCE_MARKER} run={row.get('marker_run')}),"
+                f" but the agent never logs a completed contact under that marker - a person "
+                f"completed it or pasted the marker. Counted as contact; confirm who logged it.")
+    for deal in open_deals:
+        last, _ = index.last_contacted(deal)
+        future = (index.future_contact_by_deal.get(deal["id"])
+                  or index.future_contact_by_party.get(deal.get("party_id") or ""))
+        if future and last == future:
+            add(deal, "insufficient_evidence",
+                f"the only completed contact is dated {future}, after today - a contact was "
+                f"recorded but its date is impossible, so the date of contact is unknown")
+    return issues
 
 
 # A deal is supplier-side when its party is a supplier and nothing that makes
@@ -1324,6 +1455,16 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
     has_open = {d.get("id") for d in in_scope if index.open_activity(d)[0]}
     data_issues = checks.collect_data_issues(in_scope, ctx, rot_age=rot_age,
                                              has_open_action=has_open)
+    data_issues += contact_evidence_issues(in_scope, index)
+    party_names = {pid: p.get("name") for pid, p in (ctx.parties or {}).items()}
+    deal_titles = {d.get("id"): checks.display_title(d) for d in all_deals}
+    mismatched = [{"activity_id": m.get("activity_id"), "subject": m.get("subject"),
+                   "deal_id": m.get("deal_id"), "deal": deal_titles.get(m.get("deal_id")),
+                   "activity_party": party_names.get(m.get("activity_party_id"),
+                                                     m.get("activity_party_id")),
+                   "deal_party": party_names.get(m.get("deal_party_id"),
+                                                 m.get("deal_party_id"))}
+                  for m in index.mismatched_links]
     late_orders = checks.find_late_orders(in_scope, ctx)
     leads = checks.find_leads_needing_action(all_deals, ctx, threshold)
     weighted = checks.weighted_pipeline(in_scope, ctx)
@@ -1339,7 +1480,12 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                     + " - see data_issues.")
     if index.mismatched_links:
         summary += (f" {len(index.mismatched_links)} activit(ies) link a deal of one customer "
-                    f"to another customer and were not counted as contact.")
+                    f"to another customer and were not counted as contact - see "
+                    f"mismatched_links.")
+    if index.noncontact_done:
+        summary += (f" {index.noncontact_done} completed task(s), cancelled call(s) or other "
+                    f"non-contact activit(ies) were not counted as customer contact (only "
+                    f"{', '.join(sorted(CONTACT_TYPES))} count).")
     if index.backdated_contacts:
         summary += (f" {index.backdated_contacts} reported contact(s) were dated from their "
                     f"recorded actual_date, not their log date.")
@@ -1363,7 +1509,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                                 "party": d.get("_party_id_display") or d.get("party_id"),
                                 "value": d.get("value"),
                                 "reason": exclusion_reasons[d.get("id")]} for d in excluded],
-                            data_issues=data_issues, leads_needing_action=leads,
+                            data_issues=data_issues, mismatched_links=mismatched,
+                            leads_needing_action=leads,
                             late_orders=late_orders, worklist_by_owner=worklist,
                             escalations_needed=escalations, weighted_pipeline=weighted,
                             context_notes=ctx.notes + [

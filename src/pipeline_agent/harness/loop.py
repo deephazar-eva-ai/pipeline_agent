@@ -250,6 +250,13 @@ def write_block_reason(policy: WritePolicy, tool: str, arguments: dict,
         return f"writes to {entity or 'an unnamed entity'} are not allowed in this run"
     if writes_done >= policy.max_writes:
         return f"the run's write budget of {policy.max_writes} is used up"
+    if tool == "create" and entity == "Activity" and _write_field(arguments, "done"):
+        # A completed Activity claims a contact happened. Only a person's own
+        # report can say that (`--task log-contact`), and the rot analysis now
+        # counts a completed call even when it carries the agent's marker (G-D),
+        # so a model-invented one would make a deal read fresh (G-G).
+        return ("the loop may not create a completed Activity - that records a contact "
+                "as having happened; log a reported contact with --task log-contact")
     if tool == "update":
         if str(arguments.get("id")) not in policy.record_ids:
             return f"record {arguments.get('id')} is not in this run's update allow-list"
@@ -290,7 +297,8 @@ async def open_activity_duplicate(client: MCPClient, arguments: dict) -> str | N
     set. Run by the harness immediately before the create, so it holds whatever
     the model checked (or did not) - V1-loop on 2026-10-06 passed only because
     the model happened to re-read by deal_id. A completed Activity (logging a
-    contact that happened) is never a duplicate of a next action."""
+    contact that happened) is never a duplicate of a next action - and the
+    write policy refuses those before this guard runs (G-G)."""
     if arguments.get("entity") != "Activity" or _write_field(arguments, "done"):
         return None
     deal_id = _write_field(arguments, "deal_id")

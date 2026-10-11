@@ -34,6 +34,15 @@ TOOL_NAME = "contact_status"
 
 PAGE = 30          # default rows per page
 MAX_PAGE = 60
+MUST_REPORT_MAX = 25
+
+# Data-issue codes that change what the answer can claim about a deal, so they
+# travel with every view (see `must_report` in `analyse`).
+MUST_REPORT_CODES = frozenset({
+    "activity_linked_to_other_customers_deal",   # C-R6
+    "agent_marker_on_completed_contact",         # G-D
+    "insufficient_evidence",                     # G-E
+})
 
 DESCRIPTION = (
     f'- {TOOL_NAME}: read-only, the seat\'s own rot/contact/pipeline analysis, computed once '
@@ -50,7 +59,10 @@ DESCRIPTION = (
     "(status, expiry, expired) and orders made from them, and the customer's late orders. "
     "Data issues include stages the deal's pipeline does not define and activities linked "
     "to another customer's deal. Prefer it over _rot_days, which resets when tasks are "
-    "logged or completed. Each page says total and next_offset.\n")
+    "logged or completed. Each page says total and next_offset. Every response may carry "
+    "must_report: excluded deals and evidence problems (mis-linked activities, impossible "
+    "contact dates, the agent's marker on a completed contact) - name each one in the "
+    "answer.\n")
 
 _CANONICAL = "Which deals are rotting, who has not been contacted, and what is the next action on each?"
 
@@ -181,7 +193,25 @@ async def analyse(client: MCPClient, *, run_id: str = "loop") -> dict:
     for issue in issues:
         counts[issue["code"]] = counts.get(issue["code"], 0) + 1
 
+    # Findings the answer must carry whichever section the model reads. In
+    # IT-01 Run 2 (2026-10-11) the model paged only `deals` with rotting_only,
+    # so the excluded supplier deal and the mismatched link sat in sections it
+    # never opened and neither answer mentioned them (C-R5, C-R6).
+    must_report = [f"{e.get('title')}: excluded from both answers - {e.get('reason')}"
+                   for e in answer.excluded_deals
+                   if not str(e.get("reason", "")).startswith("test fixture")]
+    n_test = len(answer.excluded_deals) - len(must_report)
+    if n_test:
+        must_report.append(f"{n_test} open test-fixture deal(s) excluded")
+    must_report += [f"{i.get('deal')}: {i['code']} - {i.get('detail')}" for i in issues
+                    if i["code"] in MUST_REPORT_CODES]
+    if len(must_report) > MUST_REPORT_MAX:
+        more = len(must_report) - MUST_REPORT_MAX
+        must_report = must_report[:MUST_REPORT_MAX] + [
+            f"... and {more} more - page section data_issues"]
+
     return {
+        "must_report": must_report,
         "summary": {
             "analyzed_at": answer.analyzed_at, "today": today, "timezone": tz_name,
             "rot_threshold_days": answer.deal_rot_days, "open_deals": len(rows),
@@ -224,9 +254,10 @@ def view(analysis: dict, arguments: dict | None = None) -> dict:
         return analysis
     arguments = arguments or {}
     section = arguments.get("section") or "summary"
+    must = ({"must_report": analysis["must_report"]} if analysis.get("must_report") else {})
     if section == "summary":
         first = _page(analysis["deals"], {"limit": arguments.get("limit")})
-        return {**analysis["summary"], "deals_page": first,
+        return {**analysis["summary"], **must, "deals_page": first,
                 "uncalled": analysis["uncalled"][:PAGE]}
     if section not in ("deals", "data_issues", "late_orders", "uncalled"):
         return {"error": f"unknown section {section!r}; use summary, deals, data_issues, "
@@ -241,7 +272,7 @@ def view(analysis: dict, arguments: dict | None = None) -> dict:
             rows = [r for r in rows if r.get("rotting_by_contact")]
     if section == "data_issues" and arguments.get("code"):
         rows = [r for r in rows if r["code"] == arguments["code"]]
-    return {"section": section, **_page(rows, arguments)}
+    return {"section": section, **must, **_page(rows, arguments)}
 
 
 async def contact_status(client: MCPClient, arguments: dict | None = None, *,
