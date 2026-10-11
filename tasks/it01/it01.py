@@ -174,6 +174,16 @@ async def mark_lost(client: RealMCPClient, deal_id: str) -> bool:
     return True
 
 
+def agent_written_activities(run_dir: Path) -> list[str]:
+    """Every record id a runner artifact in this run directory says it created."""
+    ids: list[str] = []
+    for result in sorted(run_dir.glob("*/*/result.json")):
+        for record_id in read_json(result).get("created_record_ids") or []:
+            if record_id not in ids:
+                ids.append(str(record_id))
+    return ids
+
+
 async def cleanup(client: RealMCPClient, run_dir: Path, *, apply: bool) -> None:
     if not apply:
         raise SystemExit("cleanup is a live mutation; repeat with --apply")
@@ -181,6 +191,16 @@ async def cleanup(client: RealMCPClient, run_dir: Path, *, apply: bool) -> None:
     for activity_id in ids.get("activities", {}).values():
         await client.update("Activity", activity_id, {"done": True, "type": "task", "outcome": "Cancelled",
                                                         "description": f"{TAG} cleanup"})
+    # The agent's own writes (Run C, and any loop run allowed to write) are not
+    # in the fixture ledger. Run 2 left three open next actions on closed
+    # fixture deals until they were closed by hand.
+    for activity_id in agent_written_activities(run_dir):
+        row = await client.get("Activity", activity_id)
+        if not isinstance(row, dict) or row.get("done") or TAG not in str(row.get("subject") or ""):
+            continue
+        await client.update("Activity", activity_id, {"done": True, "type": "task", "outcome": "Cancelled",
+                                                        "description": f"{TAG} cleanup (agent write)"})
+        print(f"closed agent-written Activity {activity_id}")
     pending: list[str] = []
     for key, deal_id in ids.get("deals", {}).items():
         if not await mark_lost(client, deal_id):
