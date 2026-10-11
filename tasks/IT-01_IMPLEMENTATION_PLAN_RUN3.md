@@ -22,8 +22,8 @@ plan §§1–5 and are not repeated here.
 | Item | Status |
 |---|---|
 | Agent fixes (G-A to G-E, C-R5/C-R6, G-G) | On `it01-run3-fixes` (`529f7c4`); 318 tests pass with the hand-written test updates (`c0e7696`) |
-| Suryodaya check in the UI from `it01-run3-fixes` | **To do.** Completed tasks no longer count as contact, so the rotting count may rise |
-| Merge `it01-run3-fixes` into `main` and push | **To do after the UI check.** Run 3 tests `main` at the merged SHA: record it here: `________` |
+| Code under test | **Branch `it01-run3-fixes`, not `main`.** Run 3 must be green on the branch before the merge. `main` has no commits the branch lacks, so the merge is a fast-forward and `main` gets exactly the tested code. Branch head at Step 0: `________` |
+| Suryodaya UI check, then merge to `main` | **After Run 3**, on Mon 2026-10-12 (the UI is available only that day). Merge only if Run 3 is clean and green and the UI check looks right |
 | `central-eval` | Unchanged at `3394506`. Update only after Run 3 passes |
 | Decision 1 (C-H2, option B) and Decision 2 (C-R7 = {PD}, option A) | Chosen by the team 2026-10-11 and applied to the design doc §6. Instructor sign-off requested (Run 2 record §1) |
 | Cleanup | `it01.py cleanup` now also closes the agent's own writes (Step 13). No hand cleanup expected |
@@ -31,7 +31,7 @@ plan §§1–5 and are not repeated here.
 | D11 | Still open (PB2), waiting for admin; excluded from the run, as in Run 2 |
 | Announcement to Keystone teams | **Send before 18:30 IST Sun 2026-10-11:** window Sun 18:30 IST → Mon 2026-10-12 ≈ 11:00 IST, tag `[team07-test IT-01]`, "only tagged fixture records are written", D11 still visible |
 | OpenRouter credit | Run 2 used roughly $0.30–0.40 by token count (2 Sonnet Run A, 1 Qwen Run D). Check that at least $1 is left |
-| Code changes | **None from Session 1 until cleanup is done** |
+| Commits on `it01-run3-fixes` | **None from Step 0 until cleanup is done**, docs included, so the branch head stays the SHA under test |
 
 ### 0.2 Session 1: Sun 2026-10-11 18:30–21:30 IST (New York Sun 09:00–12:00)
 
@@ -39,8 +39,8 @@ plan §§1–5 and are not repeated here.
 
 ```bash
 cd /home/acer/Documents/DEEPAK/eva_april2026/capstone/pipeline_agent
-git switch main && git fetch origin && git status -sb    # main...origin/main, clean
-git rev-parse --short HEAD                               # the merged SHA recorded in §0.1
+git switch it01-run3-fixes && git fetch origin && git status -sb    # it01-run3-fixes...origin/it01-run3-fixes, clean
+git rev-parse --short HEAD                               # record as the branch head in §0.1
 .venv/bin/python -m pytest -q                            # 318 passed (or more)
 ```
 
@@ -342,7 +342,7 @@ Then tell the sharing teams that cleanup is complete.
    git status --short                   # runs/ must not appear as staged
    grep -nE "[0-9a-f]{8}-[0-9a-f]{4}-|sk-or-|TOKEN=" tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_pipeline.md   # expect no hits
    git add tasks/IT-01_IMPLEMENTATION_PLAN.md tasks/IT-01_IMPLEMENTATION_PLAN_RUN3.md docs/integration_testing_pipeline.md docs/integration_testing_pipeline_run3.md
-   git commit -m "Record IT-01 Run 3 results" && git push origin main
+   git commit -m "Record IT-01 Run 3 results" && git push    # on it01-run3-fixes; merge to main only after the UI check
    ```
 
 4. **Deferred findings.** Still open after Run 3: the next action has no
@@ -401,20 +401,18 @@ morning). New York is UTC−4 until 2026-11-01.
 
 | Deadline (IST, Sun 2026-10-11) | Item |
 |---|---|
-| ~17:00 | Suryodaya UI check on `it01-run3-fixes` |
-| ~17:30 | Merge to `main`, push, SHA recorded in §0.1; 318 tests pass |
 | before 18:30 | Announcement sent; Step 0 workspace check |
 | 18:30–21:30 | Session 1 |
 | Mon 05:30–09:00 | Session 2, Runs A–D; E, F, verify, cleanup may run past 09:00 |
 
-If the UI check or the merge is not done by 18:00 IST, move Run 3 to Tue 2026-10-13 rather than run on an unmerged branch.
+After Run 3 (Mon 2026-10-12): record the results; if clean and green, do the Suryodaya UI check on the branch, then merge to `main` and push.
 
 ## 3. Quick checklist
 
 | # | Step | Done |
 |---|---|---|
-| 1 | Suryodaya UI check on `it01-run3-fixes` | |
-| 2 | `it01-run3-fixes` merged to `main`, pushed; SHA recorded in §0.1; tests pass | |
+| 1 | Working tree on `it01-run3-fixes`, clean; branch head recorded in §0.1; 318 tests pass | |
+| 2 | No commits on the branch from Step 0 until cleanup | |
 | 3 | Day X chosen (Sun 2026-10-11); window announced | |
 | 4 | New `IT01_RUN_DIR` (`…IST-run3`) exported and written to `runs/IT-01/RUN3_DIR.txt` | |
 | 5 | Session 1: preflight, S0, baseline, seed, S1, morning Run A, S2-morning | |
@@ -424,3 +422,4 @@ If the UI check or the merge is not done by 18:00 IST, move Run 3 to Tue 2026-10
 | 9 | Run F (Suryodaya) → S6×2; back to Keystone | |
 | 10 | verify → cleanup (agent writes included) → S7 → post-cleanup canonical → announce done | |
 | 11 | Results recorded (design doc §9.3, `docs/integration_testing_pipeline_run3.md`, implementation plan) | |
+| 12 | If green: Suryodaya UI check (Mon 2026-10-12), then merge `it01-run3-fixes` into `main` and push | |
