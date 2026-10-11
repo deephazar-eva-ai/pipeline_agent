@@ -15,7 +15,7 @@ The procedure is Run 2's, unchanged except where §0.1 says so. The reasons
 behind each step (time zone, session order, fixture traps) are in the Run 2
 plan §§1–5 and are not repeated here.
 
-## 0. Run-day runbook (Day X → Day X+1)
+## 0. Run-day runbook (Sun 2026-10-11 → Mon 2026-10-12)
 
 ### 0.1 What changed since Run 2, and what must be true before Session 1
 
@@ -29,11 +29,11 @@ plan §§1–5 and are not repeated here.
 | Cleanup | `it01.py cleanup` now also closes the agent's own writes (Step 13). No hand cleanup expected |
 | Loop: completed Activity creates | Refused by the write policy (G-G). Run D's D8 note can no longer produce a `done=true` call |
 | D11 | Still open (PB2), waiting for admin; excluded from the run, as in Run 2 |
-| Announcement to Keystone teams | **Send before Session 1:** window Day X 18:30 IST → Day X+1 ≈ 11:00 IST, tag `[team07-test IT-01]`, "only tagged fixture records are written", D11 still visible |
+| Announcement to Keystone teams | **Send before 18:30 IST Sun 2026-10-11:** window Sun 18:30 IST → Mon 2026-10-12 ≈ 11:00 IST, tag `[team07-test IT-01]`, "only tagged fixture records are written", D11 still visible |
 | OpenRouter credit | Run 2 used roughly $0.30–0.40 by token count (2 Sonnet Run A, 1 Qwen Run D). Check that at least $1 is left |
 | Code changes | **None from Session 1 until cleanup is done** |
 
-### 0.2 Session 1: Day X 18:30–21:30 IST (New York Day X 09:00–12:00)
+### 0.2 Session 1: Sun 2026-10-11 18:30–21:30 IST (New York Sun 09:00–12:00)
 
 **Step 0. Before 18:30 IST: final workspace check.**
 
@@ -178,7 +178,7 @@ ls "$IT01_RUN_DIR"          # 00-preflight 00-baseline 02-run-a S0 S1 S2-morning
 cat runs/IT-01/RUN3_DIR.txt
 ```
 
-### 0.3 Session 2: Day X+1 from 05:30 IST (New York Day X 20:00); Runs A–D by 09:00 IST
+### 0.3 Session 2: Mon 2026-10-12 from 05:30 IST (New York Sun 20:00); Runs A–D by 09:00 IST
 
 **Step 7. New terminal: same run directory.** Keep the laptop awake from here
 until Run D ends.
@@ -397,7 +397,17 @@ morning). New York is UTC−4 until 2026-11-01.
 | 1. Morning | Day X, 18:30–21:30 | Day X, 09:00–12:00 | Preflight, S0, baseline, seed, S1, morning Run A, S2-morning |
 | 2. Evening | Day X+1, from 05:30 (A–D by 09:00) | Day X, 20:00–23:30 | Evening Run A, S2, Run B, approval, Run C, S3, Run D, S4, Run E, S5, Run F, S6×2, verify, cleanup, S7 |
 
-**Day X: ________** (choose after the merge; record it in the announcement).
+**Day X: Sun 2026-10-11** (company date T = 2026-10-11, New York). Chosen 2026-10-11 15:00 IST.
+
+| Deadline (IST, Sun 2026-10-11) | Item |
+|---|---|
+| ~17:00 | Suryodaya UI check on `it01-run3-fixes` |
+| ~17:30 | Merge to `main`, push, SHA recorded in §0.1; 318 tests pass |
+| before 18:30 | Announcement sent; Step 0 workspace check |
+| 18:30–21:30 | Session 1 |
+| Mon 05:30–09:00 | Session 2, Runs A–D; E, F, verify, cleanup may run past 09:00 |
+
+If the UI check or the merge is not done by 18:00 IST, move Run 3 to Tue 2026-10-13 rather than run on an unmerged branch.
 
 ## 3. Quick checklist
 
@@ -405,7 +415,7 @@ morning). New York is UTC−4 until 2026-11-01.
 |---|---|---|
 | 1 | Suryodaya UI check on `it01-run3-fixes` | |
 | 2 | `it01-run3-fixes` merged to `main`, pushed; SHA recorded in §0.1; tests pass | |
-| 3 | Day X chosen; window announced | |
+| 3 | Day X chosen (Sun 2026-10-11); window announced | |
 | 4 | New `IT01_RUN_DIR` (`…IST-run3`) exported and written to `runs/IT-01/RUN3_DIR.txt` | |
 | 5 | Session 1: preflight, S0, baseline, seed, S1, morning Run A, S2-morning | |
 | 6 | Session 2: same `IT01_RUN_DIR`; evening Run A, S2 | |
