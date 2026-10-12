@@ -8,7 +8,7 @@
 | Company date `T` | 2026-10-10 |
 | Sessions | Morning: Sat 2026-10-10 18:15–19:10 IST (company 08:45–09:40). Evening: Sun 2026-10-11 05:30–06:40 IST (company Sat 20:00–21:10) |
 | Models | Run A: `anthropic/claude-sonnet-4.6`; Run D: `qwen/qwen3.8-27b` (both via OpenRouter) |
-| Design | [`integration_testing_pipeline.md`](integration_testing_pipeline.md) (§6 checks, §7 predictions) |
+| Design | [`integration_testing_runs_consolidated.md`](integration_testing_runs_consolidated.md) (§6 checks, §7 predictions) |
 
 **Verdict: FAIL.** All write checks pass. Several reading checks fail, and the failures are the ones predicted in §7 (G-A, G-B/G-C, G-D/G-E). Two failures were not predicted: C-R5 in the loop and C-R6. Every failure is in the agent's interpretation of the data, not in the platform. Fixes are on branch `it01-run3-fixes` (§6). Run 3 must repeat the whole test.
 

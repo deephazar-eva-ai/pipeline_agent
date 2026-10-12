@@ -1,6 +1,6 @@
 # IT-01 Run 2: schedule and step-by-step procedure
 
-**Scenario:** `docs/integration_testing_pipeline.md` ("Hostile Monday")
+**Scenario:** `docs/integration_testing_runs_consolidated.md` ("Hostile Monday")
 **Package:** `tasks/it01/` (see `tasks/it01/README.md`)
 **History and context:** `tasks/IT-01_IMPLEMENTATION_PLAN.md`
 **Written:** 2026-10-09, after the central evaluator run passed 7/7 on `3394506`
@@ -324,7 +324,7 @@ Then tell the sharing teams that cleanup is complete.
    columns. Note the session-order deviation (§2.2) and D11 as PB2 residue.
 
    ```bash
-   code docs/integration_testing_pipeline.md tasks/IT-01_IMPLEMENTATION_PLAN.md
+   code docs/integration_testing_runs_consolidated.md tasks/IT-01_IMPLEMENTATION_PLAN.md
    ```
 
 3. **Execution record.** Add a sanitized record (run ID, SHA, pass/fail per
@@ -333,8 +333,8 @@ Then tell the sharing teams that cleanup is complete.
 
    ```bash
    git status --short                   # runs/ must not appear as staged
-   grep -nE "[0-9a-f]{8}-[0-9a-f]{4}-|sk-or-|TOKEN=" tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_pipeline.md   # expect no hits
-   git add tasks/IT-01_IMPLEMENTATION_PLAN.md tasks/IT-01_IMPLEMENTATION_PLAN_RUN2.md docs/integration_testing_pipeline.md
+   grep -nE "[0-9a-f]{8}-[0-9a-f]{4}-|sk-or-|TOKEN=" tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_runs_consolidated.md   # expect no hits
+   git add tasks/IT-01_IMPLEMENTATION_PLAN.md tasks/IT-01_IMPLEMENTATION_PLAN_RUN2.md docs/integration_testing_runs_consolidated.md
    git commit -m "Record IT-01 Run 2 results" && git push origin main
    ```
 
@@ -659,7 +659,7 @@ and snapshots (design doc §6 and §9).
 
 ## 6. After the run
 
-1. Fill in the design doc's §9 results table (`docs/integration_testing_pipeline.md`)
+1. Fill in the design doc's §9 results table (`docs/integration_testing_runs_consolidated.md`)
    with **evening** and **morning** columns, under the design-doc check
    numbers. Note the session-order deviation from §2.2.
 2. Add a sanitized execution record (run ID, SHA, pass/fail per gate, no

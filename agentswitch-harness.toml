@@ -1,5 +1,5 @@
 install = "pip install ."
 run     = "python -m pipeline_agent.central_runner"
 results = "results.json"
-instances = ["keystone"]
+instances = ["keystone","suryodaya"]
 timeout_minutes = 30

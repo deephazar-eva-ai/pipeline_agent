@@ -1,6 +1,6 @@
 # IT-01 Run 3: schedule and step-by-step procedure
 
-**Scenario:** `docs/integration_testing_pipeline.md` ("Hostile Monday")
+**Scenario:** `docs/integration_testing_runs_consolidated.md` ("Hostile Monday")
 **Package:** `tasks/it01/` (see `tasks/it01/README.md`)
 **Previous run:** `tasks/IT-01_IMPLEMENTATION_PLAN_RUN2.md` (procedure and reasons) and `docs/integration_testing_pipeline_run2.md` (results)
 **Written:** 2026-10-11, after Run 2
@@ -335,7 +335,7 @@ Then tell the sharing teams that cleanup is complete.
    `docs/integration_testing_pipeline_run3.md`, as for Run 2. Note D11 as PB2 residue.
 
    ```bash
-   code docs/integration_testing_pipeline.md tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_pipeline_run2.md
+   code docs/integration_testing_runs_consolidated.md tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_pipeline_run2.md
    ```
 
 3. **Execution record.** Add a sanitized record (run ID, SHA, pass/fail per
@@ -344,8 +344,8 @@ Then tell the sharing teams that cleanup is complete.
 
    ```bash
    git status --short                   # runs/ must not appear as staged
-   grep -nE "[0-9a-f]{8}-[0-9a-f]{4}-|sk-or-|TOKEN=" tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_pipeline.md   # expect no hits
-   git add tasks/IT-01_IMPLEMENTATION_PLAN.md tasks/IT-01_IMPLEMENTATION_PLAN_RUN3.md docs/integration_testing_pipeline.md docs/integration_testing_pipeline_run3.md
+   grep -nE "[0-9a-f]{8}-[0-9a-f]{4}-|sk-or-|TOKEN=" tasks/IT-01_IMPLEMENTATION_PLAN.md docs/integration_testing_runs_consolidated.md   # expect no hits
+   git add tasks/IT-01_IMPLEMENTATION_PLAN.md tasks/IT-01_IMPLEMENTATION_PLAN_RUN3.md docs/integration_testing_runs_consolidated.md docs/integration_testing_pipeline_run3.md
    git commit -m "Record IT-01 Run 3 results" && git push    # on it01-run3-fixes; merge to main only after the UI check
    ```
 
@@ -419,7 +419,7 @@ Status at 2026-10-12 07:05 IST. Run 3 passed; see `docs/integration_testing_pipe
 |---|---|---|
 | 1 | Working tree on `it01-run3-fixes`, clean; branch head recorded in §0.1; 318 tests pass | ✅ `0c45d72`, 318 passed |
 | 2 | No commits on the branch from Step 0 until cleanup | ✅ None between `0c45d72` (Sun 15:04 IST) and `3c7b2a0` (Mon 07:02 IST, after cleanup) |
-| 3 | Day X chosen (Sun 2026-10-11); window announced | ✅ Day X Sun 2026-10-11 (T = 2026-10-11 New York). Announcement: confirm ☐ |
+| 3 | Day X chosen (Sun 2026-10-11); window announced | ✅ Day X Sun 2026-10-11 (T = 2026-10-11 New York). Announcement: done |
 | 4 | New `IT01_RUN_DIR` (`…IST-run3`) exported and written to `runs/IT-01/RUN3_DIR.txt` | ✅ `20261011T185713IST-run3` |
 | 5 | Session 1: preflight, S0, baseline, seed, S1, morning Run A, S2-morning | ✅ Sun 18:57–19:12 IST (company 09:27–09:42) |
 | 6 | Session 2: same `IT01_RUN_DIR`; evening Run A, S2 | ✅ Mon 05:38–05:40 IST (company Sun 20:08–20:10); S2-morning→S2 Activity diff empty |
@@ -428,4 +428,4 @@ Status at 2026-10-12 07:05 IST. Run 3 passed; see `docs/integration_testing_pipe
 | 9 | Run F (Suryodaya) → S6×2; back to Keystone | ✅ Run F refused (IDs not in tenant); S5→S6-keystone empty |
 | 10 | verify → cleanup (agent writes included) → S7 → post-cleanup canonical → announce done | ✅ Verify `passed: true`; S7: 0 open IT-01 Activities, 16 deals `closed_lost`, quote declined; D11 only (PB2). Cleanup announcement: confirm ☐ |
 | 11 | Results recorded (design doc §9.3, `docs/integration_testing_pipeline_run3.md`, implementation plan) | ✅ Manual review: PASS (C-W5 reported). Committed `3c7b2a0`, pushed |
-| 12 | If green: Suryodaya UI check (Mon 2026-10-12), then merge `it01-run3-fixes` into `main` and push | ☐ Pending |
+| 12 | If green: Suryodaya UI check (Mon 2026-10-12), then merge `it01-run3-fixes` into `main` and push | Suryodaya check ✅: central run 2 passed 7/7 (09:11, keystone, `3394506`) and a local read-only Suryodaya rehearsal of the Run 3 code passed 7/7 (10:02). Merge ☐ pending: `main` stays at `3394506` until the central submission of `central-eval` @ `277391e` (Run 3 code, keystone + suryodaya) passes, then fast-forward |

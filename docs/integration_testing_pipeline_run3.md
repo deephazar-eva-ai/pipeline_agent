@@ -8,7 +8,7 @@
 | Company date `T` | 2026-10-11 |
 | Sessions | Morning: Sun 2026-10-11 18:57–19:12 IST (company 09:27–09:42). Evening: Mon 2026-10-12 05:38–06:29 IST (company Sun 20:08–20:59) |
 | Models | Run A: `anthropic/claude-sonnet-4.6`; Run D: `qwen/qwen3.8-27b` (both via OpenRouter) |
-| Design | [`integration_testing_pipeline.md`](integration_testing_pipeline.md) (§6 checks); predictions in `tasks/IT-01_IMPLEMENTATION_PLAN_RUN3.md` §1 |
+| Design | [`integration_testing_runs_consolidated.md`](integration_testing_runs_consolidated.md) (§6 checks); predictions in `tasks/IT-01_IMPLEMENTATION_PLAN_RUN3.md` §1 |
 | Previous run | [`integration_testing_pipeline_run2.md`](integration_testing_pipeline_run2.md) |
 
 **Verdict: PASS.** Every gating check passes, in both windows. The Run 2 reading failures (G-A to G-E, C-R5 in the loop, C-R6) are all fixed, and every write check still passes. Each Run 3 prediction came true (§4). The only non-pass is C-W5 (`party_id` on new rows), which is reported and does not gate. It fails, as predicted (G-H).

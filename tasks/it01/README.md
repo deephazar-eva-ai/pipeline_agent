@@ -1,7 +1,7 @@
 # IT-01 live-test package
 
 This directory operates the live **Hostile Monday** scenario in
-[`docs/integration_testing_pipeline.md`](../../docs/integration_testing_pipeline.md).
+[`docs/integration_testing_runs_consolidated.md`](../../docs/integration_testing_runs_consolidated.md).
 It creates a tagged fixture book, runs the planned phases, coordinates
 concurrent adversary changes, preserves snapshots, and closes the fixtures.
 
