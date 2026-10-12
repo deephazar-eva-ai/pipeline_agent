@@ -22,7 +22,7 @@ plan §§1–5 and are not repeated here.
 | Item | Status |
 |---|---|
 | Agent fixes (G-A to G-E, C-R5/C-R6, G-G) | On `it01-run3-fixes` (`529f7c4`); 318 tests pass with the hand-written test updates (`c0e7696`) |
-| Code under test | **Branch `it01-run3-fixes`, not `main`.** Run 3 must be green on the branch before the merge. `main` has no commits the branch lacks, so the merge is a fast-forward and `main` gets exactly the tested code. Branch head at Step 0: `________` |
+| Code under test | **Branch `it01-run3-fixes`, not `main`.** Run 3 must be green on the branch before the merge. `main` has no commits the branch lacks, so the merge is a fast-forward and `main` gets exactly the tested code. Branch head at Step 0: `0c45d72` |
 | Suryodaya UI check, then merge to `main` | **After Run 3**, on Mon 2026-10-12 (the UI is available only that day). Merge only if Run 3 is clean and green and the UI check looks right |
 | `central-eval` | Unchanged at `3394506`. Update only after Run 3 passes |
 | Decision 1 (C-H2, option B) and Decision 2 (C-R7 = {PD}, option A) | Chosen by the team 2026-10-11 and applied to the design doc §6. Instructor sign-off requested (Run 2 record §1) |
@@ -413,17 +413,19 @@ After Run 3 (Mon 2026-10-12): record the results; if clean and green, do the Sur
 
 ## 3. Quick checklist
 
+Status at 2026-10-12 07:05 IST. Run 3 passed; see `docs/integration_testing_pipeline_run3.md`.
+
 | # | Step | Done |
 |---|---|---|
-| 1 | Working tree on `it01-run3-fixes`, clean; branch head recorded in §0.1; 318 tests pass | |
-| 2 | No commits on the branch from Step 0 until cleanup | |
-| 3 | Day X chosen (Sun 2026-10-11); window announced | |
-| 4 | New `IT01_RUN_DIR` (`…IST-run3`) exported and written to `runs/IT-01/RUN3_DIR.txt` | |
-| 5 | Session 1: preflight, S0, baseline, seed, S1, morning Run A, S2-morning | |
-| 6 | Session 2: same `IT01_RUN_DIR`; evening Run A, S2 | |
-| 7 | Run B → human approval → Run C → S3 (C-W1 checked) | |
-| 8 | Run D → S4; Run E → S5 | |
-| 9 | Run F (Suryodaya) → S6×2; back to Keystone | |
-| 10 | verify → cleanup (agent writes included) → S7 → post-cleanup canonical → announce done | |
-| 11 | Results recorded (design doc §9.3, `docs/integration_testing_pipeline_run3.md`, implementation plan) | |
-| 12 | If green: Suryodaya UI check (Mon 2026-10-12), then merge `it01-run3-fixes` into `main` and push | |
+| 1 | Working tree on `it01-run3-fixes`, clean; branch head recorded in §0.1; 318 tests pass | ✅ `0c45d72`, 318 passed |
+| 2 | No commits on the branch from Step 0 until cleanup | ✅ None between `0c45d72` (Sun 15:04 IST) and `3c7b2a0` (Mon 07:02 IST, after cleanup) |
+| 3 | Day X chosen (Sun 2026-10-11); window announced | ✅ Day X Sun 2026-10-11 (T = 2026-10-11 New York). Announcement: confirm ☐ |
+| 4 | New `IT01_RUN_DIR` (`…IST-run3`) exported and written to `runs/IT-01/RUN3_DIR.txt` | ✅ `20261011T185713IST-run3` |
+| 5 | Session 1: preflight, S0, baseline, seed, S1, morning Run A, S2-morning | ✅ Sun 18:57–19:12 IST (company 09:27–09:42) |
+| 6 | Session 2: same `IT01_RUN_DIR`; evening Run A, S2 | ✅ Mon 05:38–05:40 IST (company Sun 20:08–20:10); S2-morning→S2 Activity diff empty |
+| 7 | Run B → human approval → Run C → S3 (C-W1 checked) | ✅ Approved D3, D8, D9a, D10, D14, D15 (05:50 IST); C-W1: 3 agent rows on D3, D9a, D14 |
+| 8 | Run D → S4; Run E → S5 | ✅ S3→S4 and S4→S5 Activity diffs empty; only Deal change D16 → `closed_lost` (adversary) |
+| 9 | Run F (Suryodaya) → S6×2; back to Keystone | ✅ Run F refused (IDs not in tenant); S5→S6-keystone empty |
+| 10 | verify → cleanup (agent writes included) → S7 → post-cleanup canonical → announce done | ✅ Verify `passed: true`; S7: 0 open IT-01 Activities, 16 deals `closed_lost`, quote declined; D11 only (PB2). Cleanup announcement: confirm ☐ |
+| 11 | Results recorded (design doc §9.3, `docs/integration_testing_pipeline_run3.md`, implementation plan) | ✅ Manual review: PASS (C-W5 reported). Committed `3c7b2a0`, pushed |
+| 12 | If green: Suryodaya UI check (Mon 2026-10-12), then merge `it01-run3-fixes` into `main` and push | ☐ Pending |
