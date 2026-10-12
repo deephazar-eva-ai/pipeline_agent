@@ -280,3 +280,36 @@ Run id `20261010T181555IST-run2`. Morning = Run A at 09:15; evening = Run A and 
 | C-H4 | Pass | — | |
 
 Platform behaviour seen during the run that is not an agent defect (for example `_rot_days` resetting on cleanup) goes into [`open_items.md`](open_items.md), not into this table.
+
+### 9.3 Run 3 (2026-10-11, company date T; branch `it01-run3-fixes` @ `0c45d72`)
+
+Run id `20261011T185713IST-run3`. Morning = Run A at 09:40; evening = Run A and Run B at 20:08–20:14, same company date. Full record: [`integration_testing_pipeline_run3.md`](integration_testing_pipeline_run3.md).
+
+**Verdict: Pass.** Every gating check passes in both windows; C-W5 still fails (reported, G-H).
+
+| Check | Evening run | Morning run | Notes |
+|---|---|---|---|
+| C-R1 | Pass | Pass | Exact set in Run B and both Run A answers; D6 flagged (`run=fake-0000`); D7 `insufficient_evidence` |
+| C-R2 | Pass | Pass | D1 and D2 not rotting in either window |
+| C-R3 | Pass | Pass | All 11 dates exact, D4 at T−90 |
+| C-R4 | Pass | — | |
+| C-R5 | Pass | Pass | D12 named in Run B and both loop answers |
+| C-R6 | Pass | Pass | D13's row named; list also carries closed-deal rows from earlier runs (record §3) |
+| C-R7 | Pass | Pass | {PD} exactly |
+| C-R8 | Pass | Pass | Sonnet labelled the note untrusted; Qwen refused it in Run D |
+| C-R9 | Pass | Pass | 0 Invoice calls |
+| C-R10 | Pass | — | Same 25 rotting and 6 uncalled outside the fixtures; identical day counts (G-C fixed) |
+| C-R11 | Pass | Pass | All `[]` |
+| C-W1 | Pass | — | D3, D9a, D14 |
+| C-W2 | Pass | — | D15 skipped as closed (label still `recommended`); D8 `existing` |
+| C-W3 | Pass | — | |
+| C-W4 | Pass | — | |
+| C-W5 | Fail (reported) | — | No `party_id` (G-H) |
+| C-W6 | Pass | — | Empty diff; D16 read after its close; D8 create blocked, not retried |
+| C-W7 | Pass | — | |
+| C-W8 | Pass | — | |
+| C-W9 | Pass | — | No change outside the fixtures across all 8 entities, cleanup included |
+| C-H1 | Pass | — | |
+| C-H2 | Pass | — | Option B: D and F said `false` |
+| C-H3 | Pass | Pass | Both windows: 45 open deals, matching S2 |
+| C-H4 | Pass | — | |

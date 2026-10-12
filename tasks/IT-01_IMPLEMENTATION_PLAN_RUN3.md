@@ -322,7 +322,11 @@ Then tell the sharing teams that cleanup is complete.
    C-W10 is a diagnostic.
 
    ```bash
-   for p in 00-baseline 02-run-a 03-run-b 03-run-c 04-run-d 05-run-e 06-run-f 07-cleanup; do it01_result "$p" | head -12; done
+   for p in 00-baseline 02-run-a 03-run-b 03-run-c 04-run-d 05-run-e 06-run-f 07-cleanup
+   do
+     echo "== $p"
+     it01_result "$p" 2>/dev/null | head -12
+   done
    ls "$IT01_RUN_DIR"/02-run-a/       # the two Run A artifacts: morning (older) and evening (newer)
    ```
 

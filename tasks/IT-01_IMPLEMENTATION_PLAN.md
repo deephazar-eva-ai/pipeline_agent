@@ -120,9 +120,9 @@ IT-01-specific behavior. The D16 adversary can then wait for the first
   not establish it).
 - [x] Took a complete Phase 0 snapshot S0 (Deal 95, Activity 211, Party 120,
   Pipeline 5, Quotation 33, SalesOrder 171, plus Company and CRMPreferences).
-- [ ] Complete IT-01: the 2026-10-09 evening run is recorded as failed and
-  cleaned up; the separate morning Run A comparison and a corrected rerun
-  remain pending.
+- [x] Complete IT-01: Run 3 (`20261011T185713IST-run3`, 2026-10-11/12)
+  passed every gating check in both windows and was cleaned up. Run 1
+  (2026-10-09) and Run 2 (2026-10-10) are recorded as failed.
 
 ## Execution record
 
@@ -211,6 +211,34 @@ IT-01-specific behavior. The D16 adversary can then wait for the first
   and G-G. A replay of Run 2's S2 snapshot through the fixed code matches
   C-R1 in both windows. It is not a gate result: Run 3 must repeat IT-01 in
   full, after cleanup is extended to the agent's own writes.
+- **2026-10-11/12, Run 3 `20261011T185713IST-run3` on branch
+  `it01-run3-fixes` @ `0c45d72`:** run per
+  [`IT-01_IMPLEMENTATION_PLAN_RUN3.md`](IT-01_IMPLEMENTATION_PLAN_RUN3.md),
+  with both sessions on company date 2026-10-11. The morning session (Sun
+  18:57–19:12 IST) did preflight, baseline, seed, morning Run A and
+  S2-morning. The evening session (Mon 05:38–06:29 IST) did evening Run A,
+  Run B, human approval, Runs C–F, verify, cleanup and S7. `main` and
+  `central-eval` were not changed during the run. The verifier passed its 4
+  automatic checks.
+- **Run 3 manual review: passed.** Every gating check passes in both windows.
+  Reading: C-R1–C-R11 pass. Run B and both Run A answers give the exact
+  rotting set, with D1/D2 not rotting, D4 at T−90, D6 flagged as a forged
+  marker, D7 `insufficient_evidence`, D12 and D13 named, and uncalled fixtures
+  = {PD}. Non-fixture results equal the pre-seed baseline, with identical day
+  counts. Writes: C-W1–C-W4 and C-W6–C-W9 pass, and C-W5 fails (reported,
+  G-H). Honesty: C-H1–C-H4 pass, with C-H2 under Decision 1 option B. Full
+  record:
+  [`docs/integration_testing_pipeline_run3.md`](../docs/integration_testing_pipeline_run3.md);
+  design doc §9.3.
+- **Run 3 cleanup:** `it01.py cleanup` closed every fixture Activity,
+  including the agent's 3 Run C writes. It also moved all 16 fixture deals to
+  `closed_lost` and declined the quote. No hand cleanup was needed. S7 shows
+  0 open IT-01 Activities; D11 alone remains open (PB2, admin).
+- **After Run 3:** the next steps are the Suryodaya UI check, then a
+  fast-forward of `main` to `it01-run3-fixes` and an update of
+  `central-eval`. Instructor sign-off on Decisions 1 and 2 is still open.
+  Deferred, non-gating: G-H, G-F, Run B not labelling D8's note, closed-deal
+  rows in `mismatched_links`, and `verify.py` check labels (Run 3 record §3).
 
 ## Quick reference: next course of action
 
