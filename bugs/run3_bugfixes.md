@@ -10,6 +10,10 @@ one test for its main behaviour (from `c0e7696`). The cases below are the edge c
 are not tested yet. The grading rubric gives AI-written tests zero, so **these are a list
 to write from, not tests**.
 
+The completed developer-style specifications are in
+[run3_test_cases.md](run3_test_cases.md). They remain manual specifications; no executable
+test code was added.
+
 **Run:** `.venv/bin/python -m pytest -q` from `pipeline_agent/`.
 
 **Two cases may find real bugs** (marked ⚠️). Decide what the behaviour should be before

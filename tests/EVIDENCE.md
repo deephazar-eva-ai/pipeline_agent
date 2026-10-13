@@ -4,10 +4,10 @@
 
 | Field | Evidence |
 |---|---|
-| Date | 2026-10-07 |
+| Date | 2026-10-13 |
 | Working directory | `pipeline_agent/` |
 | Command | `.venv/bin/pytest tests -q` |
-| Result | **297 passed** in 0.31s |
+| Result | **371 passed** in 0.38s |
 | CRM effects | None. The suite is offline; no live CRM call or write-mode execution was performed. |
 
 ## Evidence by module
@@ -26,6 +26,8 @@
 | `test_keystone_enhancement_regressions.py` | Advisory capabilities, request refusals, safe re-read behavior, tenant resolution, and timezone defaults. |
 | `test_keystone_us_entity_snapshots.py` | Synthetic US entity, tax, currency, and fulfillment contract fixture. |
 | `test_pipeline_enhancements.py` | Aggregate boundaries, pageable/cached `contact_status`, duplicate and repeat-read guards, request splitting, figure checks, and opt-in in-memory write behavior. |
+| `test_it01_scenario.py` | Offline IT-01 fixture-book population, adversarial-row coverage, and server-date behavior. |
+| `test_run3_bugfix_regressions.py` | IT-01 Run 3 fixes for contact classification, thresholds, timezones, evidence, linkage, reporting, and completed-activity write guards. |
 
 ## Latest recorded live read-only verification
 
