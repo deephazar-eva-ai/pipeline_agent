@@ -1,7 +1,7 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 16 test modules and **371 passing tests**. The
+Agent. It currently contains 16 test modules and **376 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 and Keystone-specific data and tenant contracts.
@@ -28,7 +28,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-10-13**: `371 passed in 0.38s`.
+The latest local execution was on **2026-10-13**: `376 passed in 0.33s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several

@@ -11,8 +11,10 @@ are not tested yet. The grading rubric gives AI-written tests zero, so **these a
 to write from, not tests**.
 
 The completed developer-style specifications are in
-[run3_test_cases.md](run3_test_cases.md). They remain manual specifications; no executable
-test code was added.
+[run3_test_cases.md](run3_test_cases.md). The hand-written tests for them are in
+[`tests/test_run3_bugfix_regressions.py`](../tests/test_run3_bugfix_regressions.py)
+(`464aaa6`, 2026-10-13). They cover every case except R3-GA-05 and R3-GG-04, which wait
+on the design decision marked ⚠️ below.
 
 **Run:** `.venv/bin/python -m pytest -q` from `pipeline_agent/`.
 

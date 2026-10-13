@@ -5,7 +5,7 @@
 This catalogue describes the 16 executable test modules in this directory.
 The suite uses unit, stub, CLI, artifact, and hermetic MCP/REST-contract
 coverage by default. It does not create, update, or delete shared CRM
-records. The latest offline result is **371 passed in 0.38s on 2026-10-13**;
+records. The latest offline result is **376 passed in 0.33s on 2026-10-13**;
 the retained live read-only evidence is separately identified in
 [EVIDENCE.md](EVIDENCE.md).
 

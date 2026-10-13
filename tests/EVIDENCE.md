@@ -7,7 +7,7 @@
 | Date | 2026-10-13 |
 | Working directory | `pipeline_agent/` |
 | Command | `.venv/bin/pytest tests -q` |
-| Result | **371 passed** in 0.38s |
+| Result | **376 passed** in 0.33s |
 | CRM effects | None. The suite is offline; no live CRM call or write-mode execution was performed. |
 
 ## Evidence by module

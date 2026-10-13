@@ -8,7 +8,7 @@ legal tax determination.
 
 The fixture is deliberately offline and is loaded from this directory; the
 module makes no HTTP requests. The latest suite execution on 2026-10-13
-validated its nine contract cases as part of the 371 passing tests. If a
+validated its nine contract cases as part of the 376 passing tests. If a
 reviewed live-capture verifier is later needed, keep its fixture outside the
 repository because it may contain customer and certificate metadata.
 
