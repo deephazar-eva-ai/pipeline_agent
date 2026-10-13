@@ -197,12 +197,23 @@ async def analyse(client: MCPClient, *, run_id: str = "loop") -> dict:
     # IT-01 Run 2 (2026-10-11) the model paged only `deals` with rotting_only,
     # so the excluded supplier deal and the mismatched link sat in sections it
     # never opened and neither answer mentioned them (C-R5, C-R6).
-    must_report = [f"{e.get('title')}: excluded from both answers - {e.get('reason')}"
-                   for e in answer.excluded_deals
-                   if not str(e.get("reason", "")).startswith("test fixture")]
-    n_test = len(answer.excluded_deals) - len(must_report)
+    # Test fixtures and the company's own employees collapse to one line each:
+    # Suryodaya alone has 20 open employee deals (bug 31589ab3), which would
+    # otherwise crowd out everything else under MUST_REPORT_MAX.
+    must_report = []
+    if answer.unavailable_note:
+        must_report.append(answer.unavailable_note)
+    must_report += [f"{e.get('title')}: excluded from both answers - {e.get('reason')}"
+                    for e in answer.excluded_deals
+                    if not str(e.get("reason", "")).startswith(("test fixture", "own employee"))]
+    n_test = sum(1 for e in answer.excluded_deals
+                 if str(e.get("reason", "")).startswith("test fixture"))
+    n_employee = sum(1 for e in answer.excluded_deals
+                     if str(e.get("reason", "")).startswith("own employee"))
     if n_test:
         must_report.append(f"{n_test} open test-fixture deal(s) excluded")
+    if n_employee:
+        must_report.append(f"{n_employee} open deal(s) on the company's own employees excluded")
     must_report += [f"{i.get('deal')}: {i['code']} - {i.get('detail')}" for i in issues
                     if i["code"] in MUST_REPORT_CODES]
     if len(must_report) > MUST_REPORT_MAX:

@@ -485,11 +485,12 @@ def find_leads_needing_action(deals: list[dict], ctx: PipelineContext,
         status = lead.get("status")
         if status in ("converted", "disqualified"):
             continue
-        # Same scope rule as deals: a supplier-only party is not a sales lead.
+        # Same scope rule as deals: a supplier-only or employee-only party
+        # (the company's own staff, bug 31589ab3) is not a sales lead.
         roles = {r.get("role") for r in ((ctx.parties or {}).get(lead.get("party_id"), {})
                                          .get("roles") or [])
                  if isinstance(r, dict) and r.get("active", True)}
-        if roles and "supplier" in roles and not roles & {"customer", "prospect"}:
+        if roles and roles & {"supplier", "employee"} and not roles & {"customer", "prospect"}:
             continue
         party = (ctx.parties or {}).get(lead.get("party_id"), {}).get("name") or lead.get("party_id")
         reasons = []

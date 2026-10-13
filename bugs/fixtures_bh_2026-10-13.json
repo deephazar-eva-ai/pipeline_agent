@@ -1,0 +1,38 @@
+{
+ "created_at": "2026-10-13T07:18:26.943956+00:00",
+ "instance": "keystone",
+ "records": [
+  {
+   "entity": "Party",
+   "id": "954711e4-6faf-47ec-b157-a459ff30c322"
+  },
+  {
+   "entity": "Deal",
+   "id": "06897613-f146-49e2-b5d4-8f8ae5b3581e"
+  },
+  {
+   "entity": "Activity",
+   "id": "51e5da6b-1750-482e-aae4-517e0da601e4"
+  },
+  {
+   "entity": "Quotation",
+   "id": "c273fe40-1f69-43a4-b834-6a317b924112",
+   "number": "QTN-2026-00037",
+   "note": "H10, permanent draft (cancel needs admin)"
+  },
+  {
+   "entity": "WebOrder",
+   "instance": "suryodaya",
+   "number": "WEB-2026-00112",
+   "id": "0b05d206-62f7-47a4-8fba-ef05372f8dfb",
+   "final": "cancelled"
+  },
+  {
+   "entity": "WebOrder",
+   "instance": "suryodaya",
+   "number": "WEB-2026-00113",
+   "id": "c9dda162-b00d-4185-8451-95e840280861",
+   "final": "cancelled"
+  }
+ ]
+}
