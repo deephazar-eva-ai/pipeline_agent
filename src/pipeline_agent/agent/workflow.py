@@ -1445,6 +1445,14 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
              if len(results) == candidates_found else
              f"{candidates_found} rotting deal(s) found, threshold={threshold} days - "
              f"PARTIAL RUN: analyzed {len(results)} of them (--limit/--deal-id).")
+    # Say which signal makes each deal rotting, so the headline count is not
+    # read as "no customer contact" when most of it is the platform's flag.
+    by_contact = sum(1 for r in results if r.rot_evidence.get("independently_flags"))
+    if results:
+        scope += (f" Of the {len(results)} analyzed, {by_contact} have had no real customer "
+                  f"contact for more than {threshold} days; the other "
+                  f"{len(results) - by_contact} are rotting only by the platform's signal "
+                  f"- see rot_evidence.")
     if scope_notes:
         scope += " " + "; ".join(scope_notes) + "."
     laundered = sum(1 for r in results
@@ -1459,8 +1467,8 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                f"action that is overdue. "
                f"{len(uncalled)} customer(s) with open deals not called in {threshold} days "
                f"({sum(1 for u in uncalled if u.last_called is None)} never called)"
-               + (f"; {len(never_called_new)} more never called but in the book under "
-                  f"{threshold} days - see never_called_new" if never_called_new else "")
+               + (f"; {len(never_called_new)} more never called but in the book "
+                  f"{threshold} days or less - see never_called_new" if never_called_new else "")
                + ". "
                f"Platform context: {calibration.note()}.")
     n_test = sum(1 for r in exclusion_reasons.values() if r.startswith("test fixture"))

@@ -158,7 +158,7 @@ def _report_result(run: TaskRun, result: Any) -> None:
                   f"value={u.open_deal_value:,.0f}")
         if result.never_called_new:
             print(f"\nnever_called_new ({len(result.never_called_new)}): never called, "
-                  f"in the book under the threshold")
+                  f"in the book for the threshold or less")
             for u in result.never_called_new:
                 print(f"  {u.party_name:<34} in book {u.days_since}d  open deals="
                       f"{len(u.open_deal_ids)} value={u.open_deal_value:,.0f}")
