@@ -177,14 +177,41 @@ STAGE_ACTION_TEMPLATES: dict[str, str] = {
 }
 
 
-async def load_rot_threshold(client: MCPClient) -> tuple[int, bool]:
+# CRMPreferences is one company-wide record that every CRM seat can write
+# (bug 66f96caa, 2026-10-13), so another team can change the threshold under
+# us. A live value outside this range is treated as a bad edit, not a policy:
+# 1 day would make the whole book rot, 365 would empty the answer.
+MIN_ROT_DAYS = 7
+MAX_ROT_DAYS = 90
+
+
+class RotThreshold(tuple):
+    """(deal_rot_days, used_live_value) - unpacks like the plain pair - plus
+    `note`, why the live value was not used (empty when it was)."""
+
+    def __new__(cls, days: int, used_live: bool, note: str = ""):
+        self = super().__new__(cls, (days, used_live))
+        self.note = note
+        return self
+
+
+async def load_rot_threshold(client: MCPClient) -> RotThreshold:
     """Returns (deal_rot_days, used_live_value). CRMPreferences is in the crm
     domain - this call is expected to succeed under this seat's current
     policy, unlike the Deal/Activity calls below."""
     resp = await client.list_("CRMPreferences", limit=1)
     records = resp.get("records", []) if isinstance(resp, dict) else []
-    days = _positive_days(records[0].get("deal_rot_days")) if records else None
-    return (days, True) if days is not None else (DEFAULT_ROT_DAYS, False)
+    raw = records[0].get("deal_rot_days") if records else None
+    days = _positive_days(raw)
+    if days is None:
+        return RotThreshold(DEFAULT_ROT_DAYS, False)
+    if not MIN_ROT_DAYS <= days <= MAX_ROT_DAYS:
+        return RotThreshold(DEFAULT_ROT_DAYS, False, (
+            f"CRMPreferences.deal_rot_days is {days} days, outside the accepted "
+            f"{MIN_ROT_DAYS}-{MAX_ROT_DAYS} - used the default of {DEFAULT_ROT_DAYS} days. "
+            f"It is one company-wide setting any CRM seat can change; ask an admin "
+            f"who changed it"))
+    return RotThreshold(days, True)
 
 
 def _positive_days(value: Any) -> int | None:
@@ -1110,6 +1137,29 @@ def is_supplier_only(roles: set[str] | None) -> bool:
     return bool(roles) and SUPPLIER_ROLE in roles and not (roles & SALES_ROLES)
 
 
+# The company's own staff are not customers. Suryodaya's seed book has 25
+# deals and 53 leads on employee-only parties, 5 of them won (bug 31589ab3,
+# 2026-10-13), and the platform lets any party become an employee while it
+# has open deals - so "customers to call" listed colleagues.
+EMPLOYEE_ROLE = "employee"
+SUPPLIER_REASON = "supplier-side: party role supplier, not customer/prospect"
+EMPLOYEE_REASON = "own employee: party role employee, not customer/prospect"
+
+
+def is_employee_only(roles: set[str] | None) -> bool:
+    """None (roles unknown) is never employee-only: unknown is not excluded."""
+    return bool(roles) and EMPLOYEE_ROLE in roles and not (roles & SALES_ROLES)
+
+
+def non_sales_reason(roles: set[str] | None) -> str | None:
+    """Why a party with these roles is out of both answers, or None."""
+    if is_supplier_only(roles):
+        return SUPPLIER_REASON
+    if is_employee_only(roles):
+        return EMPLOYEE_REASON
+    return None
+
+
 async def load_party_roles(client: MCPClient, *, page_size: int = 1000
                            ) -> tuple[dict[str, set[str]] | None, str]:
     """(active roles per party id, "") - or (None, why) when Party could not
@@ -1212,9 +1262,12 @@ def find_hidden_silence(deals: list[dict], index: ActivityIndex, now: dt.datetim
 
 async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                               run_id: str) -> CanonicalAnswer | RefusalResult:
+    threshold_rejected = ""
     try:
-        threshold, used_live = await load_rot_threshold(client)
-        threshold_note = ("" if used_live else
+        setting = await load_rot_threshold(client)
+        threshold, used_live = setting
+        threshold_rejected = getattr(setting, "note", "")
+        threshold_note = ("" if used_live else getattr(setting, "note", "") or
                           f"CRMPreferences.deal_rot_days unavailable or not a positive number "
                           f"- used the schema default of {DEFAULT_ROT_DAYS} days")
     except PermissionDeniedError as e:
@@ -1292,20 +1345,25 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                                     currency_symbol=currency_symbol)
     ctx.notes[:0] = context_notes
 
-    # Supplier-side deals leave both answers. Calibration below still sees
-    # every deal: it measures the platform's own line, which supplier deals
-    # are as good evidence for as any.
+    # Supplier-side deals and deals on the company's own employees leave both
+    # answers. Calibration below still sees every deal: it measures the
+    # platform's own line, which these deals are as good evidence for as any.
     party_roles, party_error = await load_party_roles(client)
+    exclusion_reasons: dict = {}
     if party_roles is None:
         excluded: list[dict] = []
-        exclusion_note = (f"{party_error} - supplier-side deals could not be identified "
-                          f"and are NOT excluded.")
+        exclusion_note = (f"{party_error} - supplier-side and employee deals could not be "
+                          f"identified and are NOT excluded.")
     else:
-        excluded = [d for d in all_deals if not str(d.get("stage", "")).startswith("closed")
-                    and is_supplier_only(party_roles.get(d.get("party_id")))]
+        excluded = []
+        for d in all_deals:
+            if str(d.get("stage", "")).startswith("closed"):
+                continue
+            reason = non_sales_reason(party_roles.get(d.get("party_id")))
+            if reason:
+                excluded.append(d)
+                exclusion_reasons[d.get("id")] = reason
         exclusion_note = ""
-    exclusion_reasons = {d.get("id"): "supplier-side: party role supplier, not customer/prospect"
-                         for d in excluded}
     # Item 4.1: other teams' (and our own) tagged test records are rows in
     # the shared book, not pipeline. PIPELINE_INCLUDE_TEST_DATA=1 keeps them.
     if os.environ.get("PIPELINE_INCLUDE_TEST_DATA", "").strip() not in ("1", "true", "yes"):
@@ -1406,14 +1464,25 @@ async def run_canonical_task(client: MCPClient, request: AgentRequest, *,
                + ". "
                f"Platform context: {calibration.note()}.")
     n_test = sum(1 for r in exclusion_reasons.values() if r.startswith("test fixture"))
-    if excluded and len(excluded) > n_test:
-        summary += (f" {len(excluded) - n_test} open supplier-side deal(s) excluded from both "
+    n_supplier = sum(1 for r in exclusion_reasons.values() if r == SUPPLIER_REASON)
+    n_employee = sum(1 for r in exclusion_reasons.values() if r == EMPLOYEE_REASON)
+    if n_supplier:
+        summary += (f" {n_supplier} open supplier-side deal(s) excluded from both "
                     f"answers (party role supplier, not customer/prospect) - see excluded_deals.")
+    if n_employee:
+        summary += (f" {n_employee} open deal(s) on the company's own employees excluded from "
+                    f"both answers (party role employee, not customer/prospect) - see "
+                    f"excluded_deals.")
     if n_test:
         summary += (f" {n_test} open test-fixture deal(s) ([teamNN-test/probe] tags) excluded "
                     f"- see excluded_deals.")
     if exclusion_note:
         summary += f" {exclusion_note}"
+    if threshold_rejected:
+        summary += f" {threshold_rejected}."
+    elif used_live and threshold != DEFAULT_ROT_DAYS:
+        summary += (f" The {threshold}-day threshold is the live CRMPreferences.deal_rot_days "
+                    f"(default {DEFAULT_ROT_DAYS}), a company-wide setting any CRM seat can change.")
     no_party = [d for d in in_scope if not d.get("party_id")
                 and not str(d.get("stage", "")).startswith("closed")]
     if no_party:

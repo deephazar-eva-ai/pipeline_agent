@@ -1,6 +1,6 @@
 # IT-01 implementation plan and progress
 
-**Scenario:** `docs/integration_testing_pipeline.md` ("Hostile Monday")
+**Scenario:** `docs/integration_testing_runs_consolidated.md` ("Hostile Monday")
 **Status:** preparation started; the read-only Keystone preflight passed. No
 fixtures or CRM writes have been made.
 **Created:** 2026-10-08

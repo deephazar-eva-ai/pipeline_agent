@@ -147,7 +147,8 @@ class CanonicalAnswer:
     # something to drop silently either. `days_since` holds the relationship age.
     never_called_new: list[UncalledParty] = field(default_factory=list)
     # Open deals left out of every list above, each with why. Today: supplier-
-    # side deals (party role supplier, not customer/prospect). Listed rather
+    # side deals and deals on the company's own employees (party role supplier
+    # or employee, not customer/prospect), and test fixtures. Listed rather
     # than silently dropped, so an excluded deal is never mistaken for a
     # healthy one.
     excluded_deals: list[dict[str, Any]] = field(default_factory=list)

@@ -213,7 +213,7 @@ async def run_preflight(client: MCPClient, *, configured_surface: str) -> Prefli
         if probe["outcome"] != expected:
             report.notes.append(
                 f"optional {entity}: {probe['outcome']} ({probe['detail']}) - the canonical "
-                f"task will run without it (supplier-side deals will NOT be excluded)")
+                f"task will run without it (supplier-side and employee deals will NOT be excluded)")
 
     report.gate_g1 = _gate_g1_verdict(report.probes)
     # Readiness needs EVERY probe green, not just the Gate G1 verdict.

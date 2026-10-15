@@ -1,7 +1,7 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 14 test modules and **297 passing tests**. The
+Agent. It currently contains 17 test modules and **408 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 and Keystone-specific data and tenant contracts.
@@ -28,7 +28,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-10-07**: `297 passed in 0.31s`.
+The latest local execution was on **2026-10-13**: `408 passed in 0.39s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several
@@ -63,6 +63,14 @@ loaded only by the snapshot test, and contains no live tenant data.
 - `test_pipeline_enhancements.py` — aggregate and derived-analysis boundaries,
   loop duplicate/repeat guards, request splitting, figure validation, and
   opt-in in-memory write behavior.
+- `test_it01_scenario.py` — internal consistency of the offline IT-01 fixture
+  book, its adversarial rows, and evening/server-date handling.
+- `test_run3_bugfix_regressions.py` — IT-01 Run 3 contact classification, rot
+  thresholds, timezone, evidence, linkage, reporting, and write-guard fixes.
+- `test_emp_deal_rot_config.py` — 2026-10-13 bug-hunt fixes: employee-only
+  parties left out of both answers (31589ab3) and the live `deal_rot_days`
+  accepted only within 7–90 days (66f96caa). Specified in
+  `bugs/bughunt_test_cases.md`.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.
 

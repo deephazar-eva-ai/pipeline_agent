@@ -7,8 +7,8 @@ illustrative and **must not** be treated as a Keystone production capture or a
 legal tax determination.
 
 The fixture is deliberately offline and is loaded from this directory; the
-module makes no HTTP requests. The latest suite execution on 2026-09-30
-validated its nine contract cases as part of the 272 passing tests. If a
+module makes no HTTP requests. The latest suite execution on 2026-10-13
+validated its nine contract cases as part of the 408 passing tests. If a
 reviewed live-capture verifier is later needed, keep its fixture outside the
 repository because it may contain customer and certificate metadata.
 

@@ -2,10 +2,10 @@
 
 ## Scope
 
-This catalogue describes the 13 executable test modules in this directory.
+This catalogue describes the 17 executable test modules in this directory.
 The suite uses unit, stub, CLI, artifact, and hermetic MCP/REST-contract
 coverage by default. It does not create, update, or delete shared CRM
-records. The latest offline result is **272 passed in 0.38s on 2026-09-30**;
+records. The latest offline result is **408 passed in 0.39s on 2026-10-13**;
 the retained live read-only evidence is separately identified in
 [EVIDENCE.md](EVIDENCE.md).
 
@@ -26,6 +26,10 @@ The latest execution evidence is recorded in [EVIDENCE.md](EVIDENCE.md).
 | Canonical propose workflow | `test_nonwrite_workflows.py`, `test_catalogue_unit_stub.py` | Candidate scope, caps, output evidence, recommendations, existing actions, and no-write behavior are asserted. |
 | Repeatability and artifacts | `test_remaining_offline_catalogue.py`, `test_catalogue_unit_stub.py` | Repeated propose results are equivalent; artifacts start running, finish correctly, and redact tokens. |
 | Logged-bug regressions | `test_logged_bug_regressions.py` | Integer `done` handling, future contact dates, party linkage, rot laundering, calibration, and unknown stages remain safe. |
+| Aggregate and derived-analysis boundaries | `test_pipeline_enhancements.py` | Cached/pageable contact status, duplicate and repeat-read guards, request splitting, figure checks, and opt-in in-memory writes remain bounded. |
+| IT-01 fixture integrity | `test_it01_scenario.py` | Fixture population, adversarial traps, and company-versus-server date handling remain coherent offline. |
+| IT-01 Run 3 regressions | `test_run3_bugfix_regressions.py` | Contact type and cancellation rules, rot boundaries, timezone dates, provenance markers, link mismatches, reports, and write guards remain safe. |
+| Bug-hunt fixes 2026-10-13 | `test_emp_deal_rot_config.py` | Employee-only parties are excluded from deals, uncalled and leads and collapse to one `must_report` line; the live rot threshold is accepted only within 7–90 days, and a rejected or non-default value is disclosed (cases BH-EMP-01..05, BH-ROT-01..04). |
 
 ## Boundary and integration-contract cases
 
