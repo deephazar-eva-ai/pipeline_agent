@@ -282,7 +282,8 @@ async def main_async(args: argparse.Namespace) -> int:
                                      run_id=run_id)
                 notes = run.context_notes
                 run = await run_loop(task, client, llm, settings.model_name,
-                                      max_steps=args.max_steps, write_policy=policy)
+                                      max_steps=args.max_steps, write_policy=policy,
+                                      token_budget=args.token_budget)
                 run.context_notes[:0] = notes
                 if task.get("refused_part"):
                     run.final_answer = {"refused_part": task["refused_part"],
@@ -341,6 +342,9 @@ def main() -> int:
                               "model-driven loop, which picks its own tool calls (needs MODEL_NAME).")
     parser.add_argument("--max-steps", type=int, default=12,
                          help="maximum model turns for --task loop.")
+    parser.add_argument("--token-budget", type=_non_negative_int, default=None,
+                         help="--task loop: stop once input + output tokens reach this many "
+                              "(checked after each model call; default: no cap).")
     parser.add_argument("--exec-mode", choices=["propose", "create-next-actions"], default="propose")
     parser.add_argument("--limit", type=_non_negative_int, default=None,
                          help="act on at most N candidate deals, worst-rot first. Use it to "

@@ -96,6 +96,11 @@ REFUSAL_TIMEOUT = 10
 SKIPPED_TIMEOUT = 5
 
 LOOP_MAX_STEPS = 12
+# Hard token cap for the loop task, per instance. The evaluator allows 500k
+# tokens per run across both instances; central Run 3 used ~245k in total.
+# 150k each keeps two instances plus the model probe well under the cap, so
+# one chatty loop can't starve the rest of the run.
+LOOP_TOKEN_BUDGET = 150_000
 EVIDENCE_LIMIT = 500
 CONSOLE_EVIDENCE_LIMIT = 200
 
@@ -238,7 +243,8 @@ async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult
     run_id = uuid.uuid4().hex
     task = {"id": "central-loop", "prompt": CANONICAL_REQUEST, "run_id": run_id}
     run = await run_loop(task, client, llm, model_name, max_steps=LOOP_MAX_STEPS,
-                         write_policy=WritePolicy(run_id=run_id))
+                         write_policy=WritePolicy(run_id=run_id),
+                         token_budget=LOOP_TOKEN_BUDGET)
 
     writes = find_writes(run.steps)
     wrote_anything = writes or run.created_record_ids or run.updated_record_ids
@@ -250,7 +256,8 @@ async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult
         f"ended={run.ended}; model calls={run.calls}; "
         f"tool steps={reads}; writes={len(writes)}; "
         f"created={len(run.created_record_ids)}; updated={len(run.updated_record_ids)}; "
-        f"unsupported figures={len(run.unsupported_figures)}"
+        f"unsupported figures={len(run.unsupported_figures)}; "
+        f"tokens={run.input_tokens + run.output_tokens}/{LOOP_TOKEN_BUDGET}"
     )
     if run.error:
         evidence += f"; error={run.error[:150]}"

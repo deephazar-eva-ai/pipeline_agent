@@ -431,7 +431,10 @@ def compact_result(result: Any, budget: int = RESULT_CHAR_BUDGET) -> str:
 
 async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                     *, max_steps: int = 12, write_policy: WritePolicy | None = None,
-                    derived_tools: bool = True) -> TaskRun:
+                    derived_tools: bool = True, token_budget: int | None = None) -> TaskRun:
+    """token_budget caps input + output tokens for the whole run. It's checked
+    after each model call, so a run can overshoot by at most one call; the run
+    then ends as "token_budget" instead of starving the tasks after it."""
     run = TaskRun(task_id=task["id"], model=model)
     events = HarnessEventSink.from_env(task)
     events.emit("run_started")
@@ -486,9 +489,19 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
             run.ended = "error"
             break
         usage = getattr(llm, "last_usage", None)
-        if isinstance(usage, dict):
+        if isinstance(usage, dict) and (usage.get("input_tokens") or usage.get("output_tokens")):
             run.input_tokens += int(usage.get("input_tokens") or 0)
             run.output_tokens += int(usage.get("output_tokens") or 0)
+        else:
+            # No usage reported: estimate (~4 chars per token) so a budget
+            # still holds on backends that don't return usage.
+            run.input_tokens += (len(prompt) + len(system)) // 4
+            run.output_tokens += len(raw or "") // 4
+        if token_budget is not None and run.input_tokens + run.output_tokens >= token_budget:
+            run.error = (f"token budget reached: {run.input_tokens + run.output_tokens} "
+                         f">= {token_budget} after {run.calls} model call(s)")
+            run.ended = "token_budget"
+            break
 
         m = re.search(r"\{.*\}", raw or "", re.S)
         if not m:
