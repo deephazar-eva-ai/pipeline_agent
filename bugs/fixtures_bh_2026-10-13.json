@@ -33,6 +33,36 @@
    "number": "WEB-2026-00113",
    "id": "c9dda162-b00d-4185-8451-95e840280861",
    "final": "cancelled"
+  },
+  {
+   "entity": "Note",
+   "id": "d1e6f8da-da27-4c13-ac44-dc3e61c53d2f",
+   "note": "H5 markup, created 2026-10-16"
+  },
+  {
+   "entity": "Activity",
+   "id": "aa443acc-92b4-4f3e-bbe5-eac5dbcaad01",
+   "note": "H5 markup, created 2026-10-16"
+  },
+  {
+   "entity": "Activity",
+   "id": "1a8c0f5f-bdff-4749-8906-9cd6e62fc34a",
+   "note": "H4 A, created 2026-10-16 00:13 UTC, closed as cancelled task"
+  },
+  {
+   "entity": "Activity",
+   "id": "4d1fe4dc-acf4-4483-8c98-7bd3cbdc8cbd",
+   "note": "H4 B, created 2026-10-16 00:13 UTC, closed as cancelled task"
+  },
+  {
+   "entity": "Activity",
+   "id": "c7a0d1b0-bdea-43fd-bc18-2ab6b144fe08",
+   "note": "H4 C, created 2026-10-16 00:13 UTC, closed as cancelled task"
+  },
+  {
+   "entity": "Activity",
+   "id": "754419ed-924b-4701-b547-09db78ac203d",
+   "note": "H4 D, created 2026-10-16 00:13 UTC, closed as cancelled task"
   }
  ]
 }

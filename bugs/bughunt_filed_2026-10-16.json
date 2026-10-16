@@ -1,0 +1,12 @@
+[
+ {
+  "id": "8bf6a643-3b50-4cfd-823d-73a26a814b23",
+  "instance": "keystone",
+  "filed": "2026-10-16",
+  "label": "K (H5)",
+  "page": "UI:Email/Knowledge Base",
+  "agent_seat": "07 Pipeline",
+  "title": "Keystone + Suryodaya UI: two editors render stored HTML without the sanitizer the read views use (HIGH)",
+  "note": "Details withheld from this repo until the platform fixes it; full report is in GET /api/bug-report/mine."
+ }
+]
