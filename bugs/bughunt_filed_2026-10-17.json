@@ -1,0 +1,12 @@
+[
+ {
+  "id": "4681e718-56c1-462f-a257-942a2631415e",
+  "instance": "suryodaya",
+  "filed": "2026-10-17",
+  "label": "L (H4)",
+  "page": "CRM:Activities",
+  "agent_seat": "07 Pipeline",
+  "title": "Suryodaya: completed activities dated \"today\" are refused as future between 00:00 and 05:30 IST — the date rule uses the UTC date, not the company's day (MEDIUM)",
+  "description": "Suryodaya: completed activities dated \"today\" are refused as future between 00:00 and 05:30 IST — the date rule uses the UTC date, not the company's day (MEDIUM)\n\nWhat happened: 2026-10-17 04:25:44 IST (2026-10-16 22:55:44 UTC), POST /api/Activity\n{type: call, party_id: 0617f889-…, due_date: \"2026-10-17\", done: true}\n→ 422 {\"field\":\"due_date\",\"message\":\"A completed activity cannot be dated in the future\"}.\nControls in the same second: done=true dated 2026-10-16 → 201; done=false dated 2026-10-17 → 201.\nThe created rows carry created_at 2026-10-16T22:55:47 (UTC), i.e. the server's \"today\" was 10-16.\nBoundary: the identical call at 05:29:42 IST (23:59:42 UTC) → 422; at 05:30:22 IST (00:00:22 UTC)\n→ 201. The cut-over is exactly UTC midnight.\n\nExpected: \"today\" for a company in India is the IST date. A call finished at 04:25 IST on\n17 Oct is dated 17 Oct and is not in the future.\n\nImpact: every Suryodaya user (UTC+5:30) for the first 5½ hours of each day cannot log work\ncompleted that day; the only workaround is to back-date it, which corrupts last-contact\nhistory (deals look a day staler, rot scores shift). An agent logging follow-ups in an early run\ngets 422s on correct input. Mirror on Keystone (UTC−4/−5): from 20:00 EDT a completed call dated\ntomorrow is accepted (verified 2026-10-16 00:13 UTC, 20:13 EDT), giving a future last contact that\nhides rot. Neither company record has a timezone field, so the rule cannot use the company day.\n\nReproduce: log in to Suryodaya between 00:00 and 05:30 IST; POST /api/Activity with done=true and\ndue_date = today's IST date → 422. Same call after 05:30 IST → 201.\n\nScope checked: REST, Activity create, Suryodaya (this report) and Keystone (mirror, accepted-future\nside). MCP and update path not tested. Script: pipeline_agent/bugs/h4_su_probe.sh.\n\nRelated: 529f67e0 (su, B8: a done Activity dated in the future) and 80aa56f5 (ks, 09-28: due_date /\ndone+future rules) — the done+future rule added since, which fixes those, is what misfires here.\n\nFixtures: [team07-test BH-20261013] Party 0617f889; Activities 95c8d929, 70cbe2dc, 7c23a5b0, all closed as cancelled tasks."
+ }
+]
