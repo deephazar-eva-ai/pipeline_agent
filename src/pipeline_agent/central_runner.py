@@ -96,11 +96,13 @@ REFUSAL_TIMEOUT = 10
 SKIPPED_TIMEOUT = 5
 
 LOOP_MAX_STEPS = 12
-# Hard token cap for the loop task, per instance. The evaluator allows 500k
-# tokens per run across both instances; central Run 3 used ~245k in total.
-# 150k each keeps two instances plus the model probe well under the cap, so
-# one chatty loop can't starve the rest of the run.
-LOOP_TOKEN_BUDGET = 150_000
+# Hard token cap for the loop task, per instance. The evaluator allows 300k
+# tokens per run across both instances; central Run 3 used ~245k in total
+# (6-call loops), the 2026-10-18 rehearsal ~19k (ks) and ~50k (su). The cap is
+# checked after each call, so a loop can overshoot by one call (~30k): 110k
+# each keeps two instances plus the model probe under 300k, so one chatty loop
+# can't push the whole run over.
+LOOP_TOKEN_BUDGET = 110_000
 EVIDENCE_LIMIT = 500
 CONSOLE_EVIDENCE_LIMIT = 200
 
