@@ -431,7 +431,16 @@ def compact_result(result: Any, budget: int = RESULT_CHAR_BUDGET) -> str:
 
 async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                     *, max_steps: int = 12, write_policy: WritePolicy | None = None,
-                    derived_tools: bool = True) -> TaskRun:
+                    derived_tools: bool = True, token_budget: int | None = None) -> TaskRun:
+    """token_budget caps input + output tokens for the whole run. It's checked
+    after each model call, so a run can overshoot by at most one call; the run
+    then ends as "token_budget" instead of starving the tasks after it.
+
+    Before that happens the run gets one wrap-up call: once the next call would
+    leave no room for another (used + twice the last call's cost), the model is
+    told to answer now from what it has read, and that call is exempt from the
+    stop. Central run 5 (2026-10-19) hit 119k >= 110k on Suryodaya after 6
+    calls with no answer, which failed the loop task."""
     run = TaskRun(task_id=task["id"], model=model)
     events = HarnessEventSink.from_env(task)
     events.emit("run_started")
@@ -475,9 +484,26 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
     # _read_key -> [times run, index in history of the latest result]
     reads: dict[str, list[int]] = {}
 
+    last_call_tokens = 0
+    wrapped_up = False
     for _ in range(max_steps):
-        prompt = json.dumps({"request": task["prompt"], "history": history[-10:],
-                             "calls_so_far": calls, "notes": notes})
+        used = run.input_tokens + run.output_tokens
+        if wrapped_up:
+            # The wrap-up call's reply was unusable; only one is allowed.
+            run.error = (f"token budget: no final answer on the wrap-up call "
+                         f"({used} of {token_budget} tokens)")
+            run.ended = "token_budget"
+            break
+        final_turn = (token_budget is not None and last_call_tokens > 0
+                      and used + 2 * last_call_tokens > token_budget)
+        payload = {"request": task["prompt"], "history": history[-10:],
+                   "calls_so_far": calls, "notes": notes}
+        if final_turn:
+            payload["budget"] = ("Token budget nearly used: this is your last turn. Reply now "
+                                 "with action done and your final answer, using only what is "
+                                 "in history and notes. Say what you could not finish. "
+                                 "Do not call any tool.")
+        prompt = json.dumps(payload)
         run.calls += 1
         try:
             raw = await _call_llm(llm, prompt, system)
@@ -486,9 +512,24 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
             run.ended = "error"
             break
         usage = getattr(llm, "last_usage", None)
-        if isinstance(usage, dict):
+        if isinstance(usage, dict) and (usage.get("input_tokens") or usage.get("output_tokens")):
             run.input_tokens += int(usage.get("input_tokens") or 0)
             run.output_tokens += int(usage.get("output_tokens") or 0)
+        else:
+            # No usage reported: estimate (~4 chars per token) so a budget
+            # still holds on backends that don't return usage.
+            run.input_tokens += (len(prompt) + len(system)) // 4
+            run.output_tokens += len(raw or "") // 4
+        last_call_tokens = run.input_tokens + run.output_tokens - used
+        if final_turn:
+            wrapped_up = True
+            run.context_notes.append(f"harness asked for a final answer: {used} of "
+                                     f"{token_budget} tokens used before the last call")
+        elif token_budget is not None and run.input_tokens + run.output_tokens >= token_budget:
+            run.error = (f"token budget reached: {run.input_tokens + run.output_tokens} "
+                         f">= {token_budget} after {run.calls} model call(s)")
+            run.ended = "token_budget"
+            break
 
         m = re.search(r"\{.*\}", raw or "", re.S)
         if not m:
@@ -504,6 +545,12 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
 
         action = act.get("action")
         _keep_notes(notes, act.get("note"))
+
+        if final_turn and action != "done":
+            run.error = (f"token budget: no final answer on the wrap-up call "
+                         f"({run.input_tokens + run.output_tokens} of {token_budget} tokens)")
+            run.ended = "token_budget"
+            break
 
         if action == "note":
             continue

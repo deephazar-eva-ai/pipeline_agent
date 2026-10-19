@@ -46,7 +46,7 @@ from pipeline_agent.agent.request_guard import check_request
 from pipeline_agent.agent.workflow import run_canonical_task
 from pipeline_agent.config import Settings
 
-from pipeline_agent.harness.loop import WritePolicy, run_loop
+from pipeline_agent.harness.loop import WritePolicy, _call_llm, run_loop
 from pipeline_agent.harness.recording import RecordingMCPClient
 from pipeline_agent.llm import build_llm
 from pipeline_agent.mcp.client import MCPClient
@@ -96,6 +96,14 @@ REFUSAL_TIMEOUT = 10
 SKIPPED_TIMEOUT = 5
 
 LOOP_MAX_STEPS = 12
+# Hard token cap for the loop task, per instance. The evaluator allows 300k
+# tokens per run across both instances; central Run 3 used ~245k in total
+# (6-call loops), the 2026-10-18 rehearsal ~19k (ks) and ~50k (su). Central
+# run 5 (2026-10-19) stopped su at 119k >= 110k after 6 calls with no answer.
+# The loop now asks for a final answer while one more call still fits (see
+# run_loop), so a chatty loop ends near the cap with an answer: 140k each keeps
+# two instances plus the model probe under 300k.
+LOOP_TOKEN_BUDGET = 140_000
 EVIDENCE_LIMIT = 500
 CONSOLE_EVIDENCE_LIMIT = 200
 
@@ -229,7 +237,8 @@ async def check_canonical(client: MCPClient) -> TaskResult:
 
 
 async def check_model(llm: LLM) -> TaskResult:
-    reply = await llm("Reply with the single word OK.", "You are a connectivity probe.")
+    # Same single retry as the loop, so one transient proxy error doesn't skip the loop task.
+    reply = await _call_llm(llm, "Reply with the single word OK.", "You are a connectivity probe.")
     reply = (reply or "").strip()
     return bool(reply), f"reply={reply[:60]!r}"
 
@@ -238,7 +247,8 @@ async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult
     run_id = uuid.uuid4().hex
     task = {"id": "central-loop", "prompt": CANONICAL_REQUEST, "run_id": run_id}
     run = await run_loop(task, client, llm, model_name, max_steps=LOOP_MAX_STEPS,
-                         write_policy=WritePolicy(run_id=run_id))
+                         write_policy=WritePolicy(run_id=run_id),
+                         token_budget=LOOP_TOKEN_BUDGET)
 
     writes = find_writes(run.steps)
     wrote_anything = writes or run.created_record_ids or run.updated_record_ids
@@ -250,7 +260,8 @@ async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult
         f"ended={run.ended}; model calls={run.calls}; "
         f"tool steps={reads}; writes={len(writes)}; "
         f"created={len(run.created_record_ids)}; updated={len(run.updated_record_ids)}; "
-        f"unsupported figures={len(run.unsupported_figures)}"
+        f"unsupported figures={len(run.unsupported_figures)}; "
+        f"tokens={run.input_tokens + run.output_tokens}/{LOOP_TOKEN_BUDGET}"
     )
     if run.error:
         evidence += f"; error={run.error[:150]}"

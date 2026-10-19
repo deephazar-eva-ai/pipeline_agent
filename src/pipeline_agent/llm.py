@@ -181,7 +181,14 @@ def _chat_completions_backend(model: str, url: str, key: str) -> LLMCallable:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            if exc.code == 429 or exc.code >= 500:
+            # The evaluator's model proxy passes an upstream provider failure
+            # through as 401 "The model provider answered 401." / upstream_error,
+            # though our own key was accepted: central run 4 (2026-10-18) on the
+            # probe, run 5 (2026-10-19) on Keystone's second loop call. That's
+            # the provider, not our credential, so it's retried like a 5xx.
+            upstream = exc.code == 401 and ("upstream_error" in detail
+                                            or "model provider answered" in detail.lower())
+            if exc.code == 429 or exc.code >= 500 or upstream:
                 # Named so run_loop's transient-error retry picks it up.
                 raise ConnectionError(f"HTTP {exc.code} from {url}: {detail[:300]}") from exc
             raise LLMConfigError(f"HTTP {exc.code} from {url}: {detail[:300]}") from exc

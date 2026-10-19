@@ -46,7 +46,7 @@ class TaskRun:
     input_tokens: int = 0
     output_tokens: int = 0
 
-    # done | refused | error | max_steps - see loop.py. Kept distinct from
+    # done | refused | error | max_steps | token_budget - see loop.py. Kept distinct from
     # `error` for the same reason S18Code kept it distinct: a run that refused
     # correctly and a run that crashed must never share one column.
     ended: str = ""
