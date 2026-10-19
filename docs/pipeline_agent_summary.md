@@ -1,6 +1,6 @@
 # Pipeline Agent: repository summary
 
-*As of 2026-10-03, branch `main`. Status figures were measured live that day; see [Current status](#current-status).*
+*As of 2026-10-19, branch `main` @ `89dc7b4`. The headline status is from 2026-10-19; the detailed canonical-task table is the 2026-10-03 live measurement. See [Current status](#current-status).*
 
 Pipeline Agent is the capstone deliverable for **AgentSwitch Seat 07, Pipeline (CRM)**. It runs against the Suryodaya Precision Works tenant on `https://agentswitch.theschoolofai.in`, and has also been exercised on the Keystone tenant (`class.agentswitch.theschoolofai.in`). The repo contains a CRM agent, the harness that runs it and records evidence, and the supporting gap analysis, bug reports and tests.
 
@@ -45,10 +45,11 @@ Behaviours that go beyond the platform's own signal:
 | `mcp/client.py` | Abstract MCP interface and `PermissionDeniedError` |
 | `mcp/real_client.py`, `mcp/transport.py` | Live JSON-RPC 2.0 client for `POST /api/mcp`, standard library only. Supports the entity-scoped tool surface (`Deal.list`, …), which is the default, and the 13-tool generic one |
 | `mcp/stub_client.py` | In-memory fixture used for offline (dry-run) runs |
-| `harness/loop.py` | Model-driven tool loop ("your own loop"), used for judgement tasks such as refusal. A second denied call to the same tool/entity force-stops the run, so the model cannot keep retrying and then claim success |
+| `harness/loop.py` | Model-driven tool loop ("your own loop"), used for judgement tasks such as refusal. A second denied call to the same tool/entity force-stops the run, so the model cannot keep retrying and then claim success. An optional token budget stops the run, after one wrap-up call in which the model is told to answer now |
 | `harness/recording.py` | Records every tool call into the run trace |
 | `harness/artifacts.py` | Writes `input.json`, `config.json` (with secrets redacted), `result.json` and `status.json` to `runs/<timestamp>__<task>__<id>/` *before* scoring |
-| `llm.py` | Model backends for the loop: `anthropic:<model>` or `ollama:<model>` |
+| `llm.py` | Model backends for the loop: `anthropic:<model>`, `openrouter:<model>`, `openai:<model>` (any OpenAI-compatible endpoint, used by the central evaluator) or `ollama:<model>`. 429, 5xx and the evaluator proxy's upstream 401 are retried once |
+| `central_runner.py` | Central evaluator entry point named in `agentswitch-harness.toml`: seven read-only tasks per instance, written to `results.json` (see the README's "Central evaluator" section) |
 | `preflight.py` | Read-only probe of what the seat can actually do: the tool catalogue it really exposes, whether each entity is readable, and drift against `catalogue_baseline.json` |
 
 On this platform the tool catalogue *is* the access boundary. Preflight therefore prints a `CHANGED:` line whenever the seat's tool set moves.
@@ -80,10 +81,11 @@ The runner's tasks are `canonical`, `preflight`, `loop` and `log-contact`. `log-
 |---|---|
 | `src/pipeline_agent/` | The agent, harness, MCP clients, preflight and CLI described above |
 | `tasks/` | `mandatory_refusal_task.py`: a human-authored scored task that probes the unavailable `Invoice` entity and verifies the refusal and that nothing changed, through direct REST snapshots. `run_refusal_task.sh` wraps it; see below. Also `task_schema.json` and the task-matrix `README.md` |
-| `tests/` | Offline suite: 14 modules, **297 passing** (2026-10-07). It covers the workflow, guards, preflight, transport, artifacts and Keystone-specific contracts. `test_pipeline_enhancements.py` (25 tests, written by the team) is part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
+| `tests/` | Offline suite: 19 modules, **418 passing** (2026-10-19). It covers the workflow, guards, preflight, transport, artifacts, the loop's token budget and model retries, and Keystone-specific contracts. `test_pipeline_enhancements.py` (written by the team) is part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
 | `gapreport/` | `crm_gapreport.md`: what the platform has, what competitors (Clarify, Monaco, Reevo) have that it lacks, and what an agent can close today. `deals_snapshot_schema.json`: the proposed `DealSnapshot` history table. `crm_gap_closure.pptx`: a 12-slide deck covering what exists, what is proposed, and the impact on schema and platform |
-| `bugs/` | `mybugs_all_2026-09-30.json`: all 75 bugs filed through `/api/bug-report/mine` (Suryodaya 41, Keystone 34). Re-checked on 2026-10-03: no new bugs or changes, all still `new` |
-| `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), plus a copy of the gap report |
+| `bugs/` | `mybugs_all_2026-09-30.json`: the 75 bugs filed up to 2026-09-30 (Suryodaya 41, Keystone 34). `bughunt_filed_2026-10-13/16/17.json`: 12 later bug-hunt filings (10, 1, 1), with their fixtures, test cases (`bughunt_test_cases.md`) and the H4 probe script. `run3_bugfixes.md` and `run3_test_cases.md`: the IT-01 Run 3 fixes |
+| `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), IT-01 run records (`integration_testing_*`), complex-jobs records, central run records (`central_run_test_result.md`, `central_runs_4_to_6.md`), plus a copy of the gap report |
+| `agentswitch-harness.toml` | Central evaluator config: install, run command, results file, instances (keystone, suryodaya), 30-minute timeout |
 | `runs/` | Run artifacts (gitignored) |
 
 ### Refusal task runner
@@ -97,9 +99,15 @@ After those checks it runs the task's `run` then `verify` steps, and exits with 
 
 ## Current status
 
-Measured live on 2026-10-03, read-only (`propose` mode; no records were written).
+### Latest (2026-10-19)
 
-### Canonical task on both tenants
+- **Central evaluator: Run 6 passed 14/14** on `da9b7e8` (keystone 7/7, suryodaya 7/7; 158,532 tokens of the 300k per-run cap). Runs 4 and 5 failed: the evaluator's model returned 401s, and the Suryodaya loop hit the old 110k budget. The fixes were the wrap-up call, a 140k budget and the proxy-401 retry. Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md`.
+- **IT-01: Run 3 passed** on 2026-10-12 (`docs/integration_testing_pipeline_run3.md`); its fixes are on `main`.
+- **Canonical task on the shared book** (2026-10-19, read-only): Keystone 25 rotting deals and 8 uncalled customers; Suryodaya 54 and 20. Part of the drop on Suryodaya since 2026-10-03 is that open deals whose only party is a company employee are now excluded (bug-hunt fix 31589ab3, 20 deals); the book has also aged since then.
+
+### Canonical task on both tenants (2026-10-03)
+
+Measured live on 2026-10-03, read-only (`propose` mode; no records were written).
 
 | | Suryodaya (India) | Keystone (US) |
 |---|---|---|
@@ -125,25 +133,24 @@ On Suryodaya, most of the data issues are deals with no contact (66) or no owner
 ### Seat access
 
 - **Preflight passes on both tenants.** `G1=sales_reachable`; CRMPreferences, Deal and Activity are all readable.
-- **The tool catalogue has changed.** Both tenants now serve **261** entity-scoped tools, against a recorded baseline of 242, so preflight prints `CHANGED:`. The new tools haven't been reviewed yet. Once they are understood, update `RECORDED_TOOL_COUNT` (and `catalogue_baseline.json`).
+- **The tool catalogue has changed.** On 2026-10-19 the shared credential and the central evaluator's copies both serve **250** entity-scoped tools (261 on 2026-10-03, 263 in the evaluator for Runs 1–3), against a recorded baseline of 242, so preflight prints `CHANGED:`. The new tools haven't been reviewed yet. Once they are understood, update `RECORDED_TOOL_COUNT` (and `catalogue_baseline.json`).
 
 ### Refusal task
 
-- **Still blocked by the platform.** A2–A4 pass, but A1 fails. The platform agent's Fireworks provider returns `401 Unauthorized` (`error_kind: config`) on both hosts, re-checked on 2026-10-03. Teams cannot fix it: `/api/agent/providers/status` reports `can_configure: false`. `tasks/run_refusal_task.sh` now detects this and stops before running.
+- **A1–A4 pass on both tenants (2026-10-07).** The platform agent's LLM provider, which returned `401 Unauthorized` until at least 2026-10-03, works again. `tasks/run_refusal_task.sh` still checks the provider first and stops if it is down.
 
 ### Tests and bugs
 
-- **Tests:** offline suite, 272 passed.
-- **Bugs:** 75 filed (Suryodaya 41, Keystone 34). Unchanged since the 2026-09-30 export; all are still `new`.
+- **Tests:** offline suite, 418 passed (2026-10-19), also on a clean Python 3.11 install.
+- **Bugs:** 75 in the 2026-09-30 export (Suryodaya 41, Keystone 34), plus 12 bug-hunt filings recorded in `bugs/` from 2026-10-13 to 2026-10-17.
 
 ### Still open
 
 See `docs/open_items.md`.
 
 - Write mode (`create-next-actions`) has not been run at scale.
-- The repo's own LLM backends (`anthropic`, `ollama`) have not made a real API call.
+- The `openai` and `openrouter` backends are exercised live (central runs, local runs); the loop's 140k budget is sized for the evaluator's model, which needs about twice as many calls as Sonnet on Suryodaya.
 - The scored task matrix is partly written: the refusal task (live) and `tests/test_pipeline_enhancements.py` (offline: rotting deal, existing and missing next action, bad stage data). No recent contact, concurrent change and live verifiers for the other cases remain, to be written by a human; AI-written tests score zero under the rubric.
-- The README is partly out of date. For example, it says `tests/` is empty and quotes the 2026-09-22 figures (81 of 133 deals rotting, 3 tool calls).
 
 ### Not on `main` yet
 

@@ -4,10 +4,11 @@
 
 | Field | Evidence |
 |---|---|
-| Date | 2026-10-13 |
-| Working directory | `pipeline_agent/` |
+| Date | 2026-10-19 |
+| Working directory | `pipeline_agent/` (branch `main` @ `89dc7b4`) |
 | Command | `.venv/bin/pytest tests -q` |
-| Result | **408 passed** in 0.39s |
+| Result | **418 passed** in 0.35s |
+| Python 3.11 check | A clean `pip install .` of `central-eval` @ `da9b7e8` into a fresh Python 3.11.15 venv: 418 passed, central dry run 4/4 |
 | CRM effects | None. The suite is offline; no live CRM call or write-mode execution was performed. |
 
 ## Evidence by module
@@ -29,11 +30,28 @@
 | `test_it01_scenario.py` | Offline IT-01 fixture-book population, adversarial-row coverage, and server-date behavior. |
 | `test_run3_bugfix_regressions.py` | IT-01 Run 3 fixes for contact classification, thresholds, timezones, evidence, linkage, reporting, and completed-activity write guards. |
 | `test_emp_deal_rot_config.py` | Bug-hunt fixes 31589ab3 (employee-only parties excluded) and 66f96caa (`deal_rot_days` range 7–90, disclosure of rejected or non-default values). |
+| `test_token_budget.py` | Loop hard token budget: stop on reported or estimated usage, no success over budget, no limit without a budget. |
+| `test_loop_wrapup.py` | Budget wrap-up call, single wrap-up chance, proxy upstream 401 retried once, plain 401 not retried, central model-probe retry, central 140k budget. |
 
 ## Latest recorded live read-only verification
 
-The latest retained live evidence is a 2026-10-07 Keystone canonical proposal
-run. It was not rerun by the offline test command above.
+The latest live evidence is the 2026-10-19 local run of the central runner on
+`da9b7e8`, against the shared book on both instances, read-only, with
+`anthropic/claude-sonnet-4.6` via OpenRouter. It was not rerun by the offline
+test command above. No run folder was kept: the central runner writes only
+`results.json`.
+
+| Check | Result |
+|---|---|
+| Keystone | 7/7: preflight tools=250, `G1=sales_reachable`; canonical 25 rotting deals, 8 uncalled customers, 13 tool calls, 0 writes; loop `done` in 2 calls, 19,291 of 140,000 tokens |
+| Suryodaya | 7/7: preflight tools=250; canonical 54 rotting deals, 20 uncalled customers, 13 tool calls, 0 writes; loop `done` in 3 calls, 49,132 of 140,000 tokens |
+| Budget wrap-up | Suryodaya with the budget forced to 40k: loop still ended `done` (49,333 tokens), so the wrap-up call works on a real model |
+| Central Run 6 | The evaluator's own run of `da9b7e8` matched: 14/14, ks 25/8, su 54/20, 0 writes |
+
+### Earlier live evidence (2026-10-07)
+
+The earlier retained live evidence is a 2026-10-07 Keystone canonical proposal
+run.
 
 | Check | Result |
 |---|---|

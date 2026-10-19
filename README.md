@@ -28,7 +28,8 @@ agent says it did.
 | MCP client | `src/pipeline_agent/mcp/` | Live JSON-RPC 2.0 client for `POST /api/mcp` (standard library only), and an in-memory stub for offline runs |
 | Preflight | `src/pipeline_agent/preflight.py` | Read-only probe of what the seat can actually do: the tool catalogue it exposes, whether each entity is readable, and drift against `catalogue_baseline.json` |
 | Deterministic workflow | `src/pipeline_agent/agent/workflow.py` | The canonical task: rot, contact status and next action, computed in plain Python |
-| Model-driven loop | `src/pipeline_agent/harness/loop.py` | "Our own loop": the model picks each tool call. A second denied call to the same tool/entity force-stops the run, so a model cannot retry past a refusal |
+| Model-driven loop | `src/pipeline_agent/harness/loop.py` | "Our own loop": the model picks each tool call. A second denied call to the same tool/entity force-stops the run, so a model cannot retry past a refusal. An optional token budget gives the model one wrap-up call to answer before the run is stopped |
+| Central evaluator entry point | `src/pipeline_agent/central_runner.py` + `agentswitch-harness.toml` | What the course's central evaluator runs: env contract, preflight, canonical task, refusal guard, model probe and the agent loop, all read-only, written to `results.json` (see [Central evaluator](#central-evaluator)) |
 | Recorder | `src/pipeline_agent/harness/recording.py` | Captures every tool call into the run trace |
 | Run artifacts | `src/pipeline_agent/harness/artifacts.py` | Writes `runs/<timestamp>__<task>__<id>/` with `input.json`, `config.json` (secrets redacted), `result.json` and `status.json`. `status.json` flips to `completed` only after `result.json` is fully written |
 | Scored tasks | `tasks/` | Human-authored tasks and verifiers that check the platform directly |
@@ -58,7 +59,7 @@ the platform's LLM provider is down.
 
 The cases come from `tasks/README.md`. Tasks and verifiers are written by hand by the
 team; the rubric scores AI-written tests at zero. The team's offline module
-`tests/test_pipeline_enhancements.py` (25 tests, added 2026-10-07) is part of the scored
+`tests/test_pipeline_enhancements.py` (added 2026-10-07) is part of the scored
 matrix. It runs against in-memory clients, so it checks the agent's logic, not a
 postcondition on the live platform.
 
@@ -74,17 +75,67 @@ postcondition on the live platform.
 
 ### Offline regression suite
 
-`tests/` holds 297 offline tests in 14 modules (`.venv/bin/pytest tests -q`). They cover
-the workflow, guards, preflight, transport, artifacts and Keystone-specific contracts.
-One module, `test_pipeline_enhancements.py`, is part of the scored matrix (above). The
-other 13 are regression tests that protect the code and are not scored. None of them can
-prove a postcondition on the live platform.
+`tests/` holds 418 offline tests in 19 modules (`.venv/bin/pytest tests -q`; 418 passed
+on 2026-10-19). They cover the workflow, guards, preflight, transport, artifacts, the
+loop's token budget and Keystone-specific contracts. One module,
+`test_pipeline_enhancements.py`, is part of the scored matrix (above). The other 18 are
+regression tests that protect the code and are not scored. None of them can prove a
+postcondition on the live platform. See `tests/README.md`.
+
+## Central evaluator
+
+The course's central evaluator checks out a submitted commit, runs `install` and `run`
+from `agentswitch-harness.toml`, and scores only `results.json`:
+
+```toml
+install = "pip install ."
+run     = "python -m pipeline_agent.central_runner"
+results = "results.json"
+instances = ["keystone","suryodaya"]
+timeout_minutes = 30
+```
+
+`central_runner.py` follows the evaluator's harness rules. It reads only the variables
+the evaluator supplies (`AGENTSWITCH_BASE_URL`, `AGENTSWITCH_TOKEN`,
+`AGENTSWITCH_INSTANCE`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`). It never
+reads `.env` and never hard-codes a platform URL. The package has no third-party
+dependencies and runs on Python 3.11. It records seven tasks per instance:
+`env-contract`, `mcp-preflight`, `canonical-read-only`, `refusal-guard`,
+`model-reachable`, `agent-loop-read-only` and `result-contract`. Every task is
+read-only and fails if anything was written. `results.json` is rewritten after each
+task, so a timeout or crash still leaves the finished rows.
+
+The agent loop has a hard budget of 140,000 tokens per instance (`LOOP_TOKEN_BUDGET`),
+which keeps both instances under the evaluator's 300k per-run cap. When the next call
+would leave no room for another, the model is told to answer from what it has read.
+That wrap-up call is exempt from the stop, and only one is allowed. The model backend
+retries a 429, a 5xx, or the evaluator proxy's upstream 401 (`"The model provider
+answered 401."`) once after 10 seconds. A plain 401 for our own key fails straight
+away.
+
+To try it locally without the evaluator: `python -m pipeline_agent.central_runner --dry-run`
+(stub MCP client, model tasks skipped). The submission branch is `central-eval`.
+
+| Run | Date | Commit | Result |
+|---|---|---|---|
+| 1, 2 | 2026-10-09, 2026-10-12 | `3394506` | Keystone only, 7/7 each |
+| 3 | 2026-10-15 | `277391e` | 14/14 (both instances), 244,757 tokens |
+| 4 | 2026-10-18 | `3f91478` | Failed: the evaluator's model returned a 401 on the probe |
+| 5 | 2026-10-19 | `6351813` | Failed: the Suryodaya loop hit the 110k budget; Keystone got the provider 401 mid-loop |
+| 6 | 2026-10-19 | `da9b7e8` | **14/14**, 158,532 tokens |
+
+Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md`.
+A central pass shows the harness installs and runs in the evaluator. It is not IT-01
+evidence.
 
 ## Status
 
-Latest measured status (2026-10-03, both tenants):
-[`docs/pipeline_agent_summary.md`](docs/pipeline_agent_summary.md). The notes below
-are the 2026-09-22 milestones.
+Latest status (2026-10-19):
+[`docs/pipeline_agent_summary.md`](docs/pipeline_agent_summary.md). In short: central
+Run 6 passed 14/14 on `da9b7e8`; IT-01 Run 3 passed on 2026-10-12
+(`docs/integration_testing_pipeline_run3.md`); on the shared book the canonical task
+reports 25 rotting deals and 8 uncalled customers on Keystone, and 54 and 20 on
+Suryodaya (2026-10-19, read-only). The notes below are the 2026-09-22 milestones.
 
 As of 2026-09-22 the agent answers the canonical question against the **live**
 Suryodaya book: 81 rotting deals out of 133, with contact status and a next
@@ -132,11 +183,14 @@ src/pipeline_agent/
     workflow.py              the deterministic canonical-task logic (Phase 2)
     refusal.py                builds the Track B refusal result (Phase 3)
   preflight.py                 read-only probe: tool catalogue + entity access
-  llm.py                        model backends for the loop (anthropic | ollama)
+  llm.py                        model backends for the loop (anthropic | openrouter | openai | ollama)
   runner.py                    CLI entry point (Phase 4)
+  central_runner.py            central evaluator entry point (agentswitch-harness.toml)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline suite, 297 tests; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
-docs/           architecture.md, agent_contract.md, open_items.md
+tests/          offline suite, 418 tests in 19 modules; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
+docs/           architecture.md, agent_contract.md, open_items.md, pipeline_agent_summary.md, IT-01 and central run records
+bugs/           filed platform bug records and bug-hunt fixtures
+agentswitch-harness.toml   central evaluator config
 runs/           run artifacts land here, gitignored except .gitkeep
 ```
 
@@ -179,7 +233,10 @@ MODEL_NAME=anthropic:claude-opus-5 \
 ```
 
 Backends are `anthropic:<model>` (needs `pip install 'pipeline-agent[anthropic]'`
-and a credential) and `ollama:<model>` (needs a local `ollama serve`). The
+and a credential), `openrouter:<model>` (needs `OPENROUTER_API_KEY`), `openai:<model>`
+(any OpenAI-compatible endpoint: `OPENAI_BASE_URL` and `OPENAI_API_KEY`; this is what
+the central evaluator uses) and `ollama:<model>` (needs a local `ollama serve`).
+`--token-budget N` caps the loop's input and output tokens. The
 request text is passed through verbatim, so scored task prompts stay
 human-authored - see `tasks/README.md`.
 Produces a run folder under `runs/`. `--mode live` requires

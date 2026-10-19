@@ -63,6 +63,34 @@ run with `ended="refused"`. A model that ignores the instruction and then
 claims success cannot produce a `claimed_success: true` artifact - the guard
 trips before its `done` action is ever read.
 
+### The token budget ends a run with an answer, not mid-thought
+
+`run_loop(token_budget=N)` caps the run's input plus output tokens. Usage comes
+from the backend's reported counts, or is estimated at about 4 characters per
+token if the backend reports none. The cap is checked after each call, so a run
+overshoots by at most one call and then ends with `ended="token_budget"`, which
+is never a success.
+
+A plain stop threw away the whole run: on central Run 5 (2026-10-19) the
+evaluator's model was still reading after 6 calls on Suryodaya when it hit the
+110k cap. So before each call the loop predicts the cost from the last call. If
+the tokens used plus twice that would pass the budget, this call becomes the
+wrap-up: the prompt carries a `budget` field telling the model to answer now
+from history and notes, say what it could not finish, and call no tool. That
+call is exempt from the stop. Only one wrap-up call is made; a tool call or an
+unusable reply on it ends the run as `token_budget`. The central runner uses
+140k per instance (`LOOP_TOKEN_BUDGET`) so both instances stay under the
+evaluator's 300k per-run cap.
+
+### Transient model errors are retried once
+
+`_call_llm` retries a transient failure once after `LLM_RETRY_DELAY` (10 s):
+connection errors, timeouts, 429 and 5xx. The OpenAI-compatible backend also
+counts the evaluator proxy's `401 "The model provider answered 401."`
+(`upstream_error`) as transient, because it reports the proxy's own provider
+failing, not our key (central Runs 4 and 5). A plain 401 is a real credential
+error and fails at once. The central model probe uses the same retry.
+
 ## How the canonical answer is actually computed
 
 Three reads, then pure Python:
