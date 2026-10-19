@@ -46,7 +46,7 @@ from pipeline_agent.agent.request_guard import check_request
 from pipeline_agent.agent.workflow import run_canonical_task
 from pipeline_agent.config import Settings
 
-from pipeline_agent.harness.loop import WritePolicy, run_loop
+from pipeline_agent.harness.loop import WritePolicy, _call_llm, run_loop
 from pipeline_agent.harness.recording import RecordingMCPClient
 from pipeline_agent.llm import build_llm
 from pipeline_agent.mcp.client import MCPClient
@@ -237,7 +237,8 @@ async def check_canonical(client: MCPClient) -> TaskResult:
 
 
 async def check_model(llm: LLM) -> TaskResult:
-    reply = await llm("Reply with the single word OK.", "You are a connectivity probe.")
+    # Same single retry as the loop, so one transient proxy error doesn't skip the loop task.
+    reply = await _call_llm(llm, "Reply with the single word OK.", "You are a connectivity probe.")
     reply = (reply or "").strip()
     return bool(reply), f"reply={reply[:60]!r}"
 
