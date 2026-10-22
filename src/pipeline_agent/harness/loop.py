@@ -149,13 +149,15 @@ WRITE_TOOLS = frozenset({"create", "update", "delete", "transition", "bulk_updat
 NEVER_FROM_LOOP = frozenset({"delete", "transition", "bulk_update", "make_from"})
 
 
-def call_shape_error(tool: Any, arguments: Any, *, derived_tools: bool) -> str | None:
+def call_shape_error(tool: Any, arguments: Any, *, derived_tools: bool,
+                     today: dt.date | None = None) -> str | None:
     """Reject malformed model calls locally, before spending an MCP round trip.
 
     The live Run D showed a model guessing unavailable ``get_schema`` and
     sending unnamed ``get``/incomplete Activity creates. Returning one
     precise repair prompt is both safer and cheaper than forwarding guesses to
-    the shared-book API.
+    the shared-book API. ``today`` is the company's day (from the company
+    clock); without it the guard falls back to the UTC date.
     """
     if not isinstance(tool, str) or not tool:
         return "tool must be a non-empty string"
@@ -191,8 +193,10 @@ def call_shape_error(tool: Any, arguments: Any, *, derived_tools: bool) -> str |
                     due_day = dt.date.fromisoformat(str(due))
                 except ValueError:
                     return "Activity.due_date must be YYYY-MM-DD"
-                if due_day < dt.datetime.now(dt.timezone.utc).date():
-                    return ("Activity.due_date is before the server UTC date; use today or a "
+                company_today = today or dt.datetime.now(dt.timezone.utc).date()
+                if due_day < company_today:
+                    return (f"Activity.due_date is before the company's today "
+                            f"({company_today.isoformat()}); use today or a "
                             "future date for a new Activity")
     # A deployment can supply defaults for Activity type and due date.  Keep
     # the portable guard narrow: a blank subject is never a useful Activity,
@@ -476,15 +480,15 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
     # against a "today" guessed from record timestamps - 2026-09-28/29 on a
     # 2026-10-06 run - so slipped deals and days-overdue were all short by a
     # week (job M3, 2026-10-06). Read once, from the company's own timezone.
+    company_today: dt.date | None = None  # None: guard falls back to UTC
     try:
         clock_notes: list[str] = []
         now, tz_name, _ = await load_company_clock(
             client, os.environ.get("PIPELINE_TIMEZONE"), clock_notes)
         system += (f"\nToday is {now.date().isoformat()} ({now.strftime('%A')}, {tz_name}). "
                    "Use this date for anything relative to today; do not infer it from records.")
-        server_today = dt.datetime.now(dt.timezone.utc).date()
-        system += (f" New Activity due_date is separately validated by the API against server UTC "
-                   f"date {server_today.isoformat()}; never use an earlier date.")
+        company_today = now.date()
+        system += " New Activity due_date must not be earlier than this date."
         run.context_notes.append(f"harness read the company clock: today="
                                  f"{now.date().isoformat()} {tz_name}")
     except MCPToolError as e:
@@ -592,7 +596,8 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
             entity = arguments.get("entity", "") if isinstance(arguments, dict) else ""
             key = (tool, entity)
 
-            malformed = call_shape_error(tool, arguments, derived_tools=derived_tools)
+            malformed = call_shape_error(tool, arguments, derived_tools=derived_tools,
+                                         today=company_today)
             if malformed:
                 run.steps.append(Step("refused", str(tool), str(entity), False,
                                        f"harness call-shape gate: {malformed}",

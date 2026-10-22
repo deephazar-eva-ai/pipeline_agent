@@ -95,10 +95,21 @@ def test_activity_call_shape_rejects_live_failure_forms_before_the_api():
         "create", {"entity": "Activity", "data": {"subject": "x", "duration": 30}},
         derived_tools=False,
     )
-    assert "server UTC date" in call_shape_error(
+    assert "before the company's today" in call_shape_error(
         "create", {"entity": "Activity", "data": {"subject": "x", "due_date": "2000-01-01"}},
         derived_tools=False,
     )
+
+
+def test_activity_due_date_guard_uses_the_company_day_not_utc():
+    # 04:25 IST on 10-17 is still 10-16 in UTC; the platform now dates by the
+    # company's day (N489), so a 10-17 activity must pass and 10-16 must not.
+    ist_today = dt.date(2026, 10, 17)
+    data = {"entity": "Activity", "data": {"subject": "x", "due_date": "2026-10-17"}}
+    assert call_shape_error("create", data, derived_tools=False, today=ist_today) is None
+    data["data"]["due_date"] = "2026-10-16"
+    assert "(2026-10-17)" in call_shape_error("create", data, derived_tools=False,
+                                              today=ist_today)
 
 
 @pytest.mark.parametrize(
