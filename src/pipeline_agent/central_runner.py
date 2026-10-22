@@ -10,6 +10,7 @@ All configuration comes from the evaluator's environment:
 
     AGENTSWITCH_BASE_URL, AGENTSWITCH_TOKEN, AGENTSWITCH_INSTANCE
     OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+    AGENTSWITCH_SECONDS_LEFT, AGENTSWITCH_DEADLINE (optional time budget)
 
 We deliberately don't load .env here (no runner._load_dotenv), so a
 developer's local credentials can't end up standing in for the evaluator's.
@@ -33,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import json
 import os
 import sys
@@ -94,6 +96,14 @@ MODEL_TIMEOUT = 120
 LOOP_TIMEOUT = 900
 REFUSAL_TIMEOUT = 10
 SKIPPED_TIMEOUT = 5
+# The evaluator also says how much of its time budget is left
+# (AGENTSWITCH_SECONDS_LEFT, or AGENTSWITCH_DEADLINE). No task is given more
+# than that minus TIME_MARGIN, so results.json is final before the evaluator
+# stops the run. The loop is told to answer LOOP_ANSWER_MARGIN before its own
+# limit, so a slow loop answers instead of being cancelled.
+TIME_MARGIN = 20
+LOOP_ANSWER_MARGIN = 30
+MIN_TASK_TIMEOUT = 5
 
 LOOP_MAX_STEPS = 12
 # Hard token cap for the loop task, per instance. The evaluator allows 300k
@@ -171,13 +181,53 @@ def find_writes(steps: list) -> list:
     return [f"{s.tool}({s.entity})" for s in tool_calls(steps) if s.tool in WRITE_TOOLS]
 
 
+def evaluator_deadline(env=None, now: float | None = None) -> float | None:
+    """The evaluator's deadline as a time.monotonic() value, or None if it
+    gave none. AGENTSWITCH_SECONDS_LEFT wins; AGENTSWITCH_DEADLINE may be epoch
+    seconds or an ISO 8601 time (a time without an offset is taken as UTC)."""
+    env = os.environ if env is None else env
+    now = time.monotonic() if now is None else now
+    left = (env.get("AGENTSWITCH_SECONDS_LEFT") or "").strip()
+    if left:
+        try:
+            return now + float(left)
+        except ValueError:
+            pass
+    raw = (env.get("AGENTSWITCH_DEADLINE") or "").strip()
+    if not raw:
+        return None
+    try:
+        at = float(raw)
+    except ValueError:
+        try:
+            parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        at = parsed.timestamp()
+    return now + (at - time.time())
+
+
+# Set once at start-up by main(); None means the evaluator gave no budget.
+DEADLINE: float | None = None
+
+
+def task_timeout(timeout: float) -> float:
+    """timeout, cut down to the evaluator's time left (less TIME_MARGIN)."""
+    if DEADLINE is None:
+        return timeout
+    left = DEADLINE - time.monotonic() - TIME_MARGIN
+    return max(MIN_TASK_TIMEOUT, min(timeout, left))
+
+
 async def run_task(results: Results, task: tuple, timeout: float,
                    body: Callable[[], Awaitable[TaskResult]]) -> bool:
     """Run one task and record it. Exceptions and timeouts become a failed row."""
     task_id, title = task
     started = time.time()
     try:
-        passed, evidence = await asyncio.wait_for(body(), timeout=timeout)
+        passed, evidence = await asyncio.wait_for(body(), timeout=task_timeout(timeout))
     except Exception as e:  # noqa: BLE001 - every failure has to end up as a row
         passed, evidence = False, describe_error(e)
     elapsed = time.time() - started
@@ -246,9 +296,11 @@ async def check_model(llm: LLM) -> TaskResult:
 async def check_loop(client: MCPClient, llm: LLM, model_name: str) -> TaskResult:
     run_id = uuid.uuid4().hex
     task = {"id": "central-loop", "prompt": CANONICAL_REQUEST, "run_id": run_id}
+    # Same limit run_task applies to this task, less the answer margin.
+    deadline = time.monotonic() + task_timeout(LOOP_TIMEOUT) - LOOP_ANSWER_MARGIN
     run = await run_loop(task, client, llm, model_name, max_steps=LOOP_MAX_STEPS,
                          write_policy=WritePolicy(run_id=run_id),
-                         token_budget=LOOP_TOKEN_BUDGET)
+                         token_budget=LOOP_TOKEN_BUDGET, deadline=deadline)
 
     writes = find_writes(run.steps)
     wrote_anything = writes or run.created_record_ids or run.updated_record_ids
@@ -357,6 +409,10 @@ def main(argv=None) -> int:
 
     instance = "dry-run" if args.dry_run else os.environ.get("AGENTSWITCH_INSTANCE", "")
     results = Results(Path(args.results), instance)
+    global DEADLINE
+    DEADLINE = evaluator_deadline()
+    if DEADLINE is not None:
+        print(f"evaluator time left: {DEADLINE - time.monotonic():.0f}s", flush=True)
 
     try:
         asyncio.run(run_all(results, dry_run=args.dry_run))

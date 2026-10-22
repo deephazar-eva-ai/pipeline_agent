@@ -204,6 +204,13 @@ def call_shape_error(tool: Any, arguments: Any, *, derived_tools: bool) -> str |
 LLMCallable = Callable[[str, str], Awaitable[str]]
 
 
+def _no_final_answer(reason: str, run: TaskRun, token_budget: int | None) -> str:
+    if reason == "time":
+        return f"time budget: no final answer on the wrap-up call ({run.calls} model call(s))"
+    return (f"token budget: no final answer on the wrap-up call "
+            f"({run.input_tokens + run.output_tokens} of {token_budget} tokens)")
+
+
 @dataclass(frozen=True)
 class WritePolicy:
     """What the loop may write in this run. The default allows nothing.
@@ -431,7 +438,8 @@ def compact_result(result: Any, budget: int = RESULT_CHAR_BUDGET) -> str:
 
 async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
                     *, max_steps: int = 12, write_policy: WritePolicy | None = None,
-                    derived_tools: bool = True, token_budget: int | None = None) -> TaskRun:
+                    derived_tools: bool = True, token_budget: int | None = None,
+                    deadline: float | None = None) -> TaskRun:
     """token_budget caps input + output tokens for the whole run. It's checked
     after each model call, so a run can overshoot by at most one call; the run
     then ends as "token_budget" instead of starving the tasks after it.
@@ -440,7 +448,13 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
     leave no room for another (used + twice the last call's cost), the model is
     told to answer now from what it has read, and that call is exempt from the
     stop. Central run 5 (2026-10-19) hit 119k >= 110k on Suryodaya after 6
-    calls with no answer, which failed the loop task."""
+    calls with no answer, which failed the loop task.
+
+    deadline (a time.monotonic() value) does the same for time: the wrap-up
+    call comes once another round (twice the last one's duration) would not
+    finish before it, and if the model still has no answer the run ends as
+    "time_budget". The central runner sets it from the evaluator's
+    AGENTSWITCH_SECONDS_LEFT, so a slow loop answers instead of being cut off."""
     run = TaskRun(task_id=task["id"], model=model)
     events = HarnessEventSink.from_env(task)
     events.emit("run_started")
@@ -486,20 +500,33 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
 
     last_call_tokens = 0
     wrapped_up = False
+    # Why the wrap-up call was made: "token" or "time" budget.
+    wrap_reason = "token"
+    last_round_start: float | None = None
+    last_round_seconds = 0.0
     for _ in range(max_steps):
         used = run.input_tokens + run.output_tokens
+        round_start = time.monotonic()
+        if last_round_start is not None:
+            last_round_seconds = round_start - last_round_start
+        last_round_start = round_start
         if wrapped_up:
             # The wrap-up call's reply was unusable; only one is allowed.
-            run.error = (f"token budget: no final answer on the wrap-up call "
-                         f"({used} of {token_budget} tokens)")
-            run.ended = "token_budget"
+            run.error = _no_final_answer(wrap_reason, run, token_budget)
+            run.ended = f"{wrap_reason}_budget"
             break
-        final_turn = (token_budget is not None and last_call_tokens > 0
-                      and used + 2 * last_call_tokens > token_budget)
+        token_short = (token_budget is not None and last_call_tokens > 0
+                       and used + 2 * last_call_tokens > token_budget)
+        time_short = (deadline is not None and last_round_seconds > 0
+                      and round_start + 2 * last_round_seconds > deadline)
+        final_turn = token_short or time_short
+        if final_turn:
+            wrap_reason = "token" if token_short else "time"
         payload = {"request": task["prompt"], "history": history[-10:],
                    "calls_so_far": calls, "notes": notes}
         if final_turn:
-            payload["budget"] = ("Token budget nearly used: this is your last turn. Reply now "
+            payload["budget"] = (f"{wrap_reason.capitalize()} budget nearly used: this is your "
+                                 "last turn. Reply now "
                                  "with action done and your final answer, using only what is "
                                  "in history and notes. Say what you could not finish. "
                                  "Do not call any tool.")
@@ -523,8 +550,13 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
         last_call_tokens = run.input_tokens + run.output_tokens - used
         if final_turn:
             wrapped_up = True
-            run.context_notes.append(f"harness asked for a final answer: {used} of "
-                                     f"{token_budget} tokens used before the last call")
+            if wrap_reason == "time":
+                run.context_notes.append(
+                    f"harness asked for a final answer: {deadline - round_start:.0f}s left, "
+                    f"last round took {last_round_seconds:.1f}s")
+            else:
+                run.context_notes.append(f"harness asked for a final answer: {used} of "
+                                         f"{token_budget} tokens used before the last call")
         elif token_budget is not None and run.input_tokens + run.output_tokens >= token_budget:
             run.error = (f"token budget reached: {run.input_tokens + run.output_tokens} "
                          f">= {token_budget} after {run.calls} model call(s)")
@@ -547,9 +579,8 @@ async def run_loop(task: dict, client: MCPClient, llm: LLMCallable, model: str,
         _keep_notes(notes, act.get("note"))
 
         if final_turn and action != "done":
-            run.error = (f"token budget: no final answer on the wrap-up call "
-                         f"({run.input_tokens + run.output_tokens} of {token_budget} tokens)")
-            run.ended = "token_budget"
+            run.error = _no_final_answer(wrap_reason, run, token_budget)
+            run.ended = f"{wrap_reason}_budget"
             break
 
         if action == "note":
