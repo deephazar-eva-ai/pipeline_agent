@@ -1,0 +1,15 @@
+[
+ {
+  "instance": "keystone",
+  "instance_url": "https://class.agentswitch.theschoolofai.in",
+  "filed_at": "2026-10-23",
+  "id": "c9c9078a-87d9-4794-ad8d-884b1d61223d",
+  "delivery": "local",
+  "issue_number": null,
+  "issue_url": null,
+  "note": "Your report was saved and the AgentSwitch team will review it. Track it with BugReport.list or GET /api/bug-report/mine.",
+  "page": "Agent tools:Preview",
+  "agent_seat": "07 Pipeline",
+  "description": "tools.preview reports allowed: true, approval_required: false and no blockers for three calls the commit then refuses, including confirming a sales order that is pending approval (LOW)\n\nWhat happened (2026-10-23 ~06:00 UTC, MCP as team07, read-only previews on our own fixtures):\n- tools.preview {name: \"SalesOrder.confirm\", arguments: {id: ae0aefa7 (SO-2026-00170, status\n  draft, approval_status pending_approval)}} → allowed true, approval_required false, blockers [].\n  The real SalesOrder.confirm on this order (2026-10-22) was refused by the guard\n  \"approval_status != pending_approval/rejected\".\n- tools.preview Quotation.make.SalesOrder on QTN-2026-00037 (draft) → allowed true, blockers [],\n  would_create a SalesOrder. The real call (2026-10-22) was refused: \"Submit or accept the\n  quotation first\". Same preview on QTN-2026-00033 (ks) and QTN-2026-00088/89 (su, read-only).\n- tools.preview Quotation.submit_for_margin_approval.draft.pending_approval on QTN-2026-00037\n  → allowed true. The real call (2026-10-22) was refused: quotation_margin_floor_not_configured.\nPreview does catch state errors correctly (e.g. Deal.qualify on a closed_lost deal →\ninvalid_state). It lists checks_not_run (\"conditions evaluated at commit\"), but the approval\nstate and the quote's own status are plain fields on the record, and approval_required: false is\na positive statement that is false.\n\nExpected: preview reports the approval guard and the make-route status guard as blockers (or at\nleast approval_required: true on a pending_approval record), as the tool description promises\n\"blockers with codes\".\nImpact: an agent that previews before acting (as the platform advises) is told the call is safe,\nthen gets refused; or it tells a user an order can be confirmed when it is waiting on approval.\nReproduce: the three tools.preview calls above (read-only).\nScope checked: SalesOrder.confirm on ks SO-00170 (only pending draft SO); make.SalesOrder on 2\ndraft quotes per instance.\nRelated: 01201a71 (pending approval not enforced on send/confirm).\nFixtures: none new."
+ }
+]
