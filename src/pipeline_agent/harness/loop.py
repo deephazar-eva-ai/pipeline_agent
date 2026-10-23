@@ -29,7 +29,7 @@ from typing import Any, Awaitable, Callable
 from pipeline_agent.agent import aggregate as agg
 from pipeline_agent.agent import contact_status as derived
 from pipeline_agent.agent.pipeline_checks import load_company_clock
-from pipeline_agent.agent.workflow import PROVENANCE_MARKER
+from pipeline_agent.agent.workflow import PROVENANCE_MARKER, is_cancelled
 from pipeline_agent.harness.base import Step, TaskRun
 from pipeline_agent.harness.events import HarnessEventSink
 from pipeline_agent.mcp.client import MCPClient, MCPToolError, PermissionDeniedError
@@ -316,8 +316,10 @@ async def open_activity_duplicate(client: MCPClient, arguments: dict) -> str | N
     party_id = _write_field(arguments, "party_id")
     if deal_id:
         found = await client.list_("Activity", filters={"deal_id": deal_id, "done": False},
-                                   limit=1)
-        records = (found.get("records") or []) if isinstance(found, dict) else []
+                                   limit=100)
+        # A cancelled row that was never completed is not a next action (N478).
+        records = [a for a in ((found.get("records") or []) if isinstance(found, dict) else [])
+                   if not is_cancelled(a)]
         if records:
             return (f"deal {deal_id} already has an open Activity "
                     f"'{records[0].get('subject')}' (id {records[0].get('id')}, due "
@@ -329,7 +331,7 @@ async def open_activity_duplicate(client: MCPClient, arguments: dict) -> str | N
         found = await client.list_("Activity", filters={"party_id": party_id, "done": False},
                                    limit=100)
         for activity in (found.get("records") or []) if isinstance(found, dict) else []:
-            if not activity.get("deal_id"):
+            if not activity.get("deal_id") and not is_cancelled(activity):
                 return (f"the customer already has an open Activity "
                         f"'{activity.get('subject')}' (id {activity.get('id')}) not tied to "
                         "another deal - not creating a duplicate")

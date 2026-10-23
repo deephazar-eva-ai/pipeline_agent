@@ -234,6 +234,65 @@ write".
 
 ---
 
+## T6. Cancelled Activity flag (offline, Release 13 / N478, added 2026-10-23)
+
+Release 13 (2026-10-23) added `Activity.cancelled` (boolean, default false; also a
+list filter). Older rows were **not** migrated: on 2026-10-23 every row had
+`cancelled=false`, including 127 Keystone and 9 Suryodaya rows whose `outcome` starts
+with "Cancelled". The code fix (`main`, after `506444b`) does this:
+
+- `workflow.is_cancelled(activity)` (new) is True only when `activity["cancelled"] is True`.
+- `workflow.is_contact(activity)` returns False when `is_cancelled` is True. The
+  "cancel" outcome prefix stays as the fallback for the old rows.
+- `load_activity_index`: an open (`done` false) row with `cancelled=True` is **not** an
+  open next action, so it isn't put in `open_by_deal` / `open_by_party` /
+  `overdue_open_by_deal`.
+- `determine_next_action` (create mode) re-read before the write: cancelled rows are
+  skipped on both the deal re-read (limit raised from 1 to 100 for this) and the
+  party re-read.
+- `harness.loop.open_activity_duplicate`: the same, for the loop's own guard.
+
+Live check after the fix (2026-10-23 22:20 IST, read-only): Keystone 25 rotting / 8
+uncalled and Suryodaya 54 / 21, the same as central Run 7. No live row has the flag
+yet, so nothing changed.
+
+### Scenarios
+
+| ID | Call | Input | Expected |
+|---|---|---|---|
+| CX-01 | `is_contact` | `{"type": "call", "done": true, "cancelled": true, "outcome": "Spoke to Pat"}` | False: the flag wins over an ordinary outcome |
+| CX-02 | `is_contact` | `{"type": "call", "done": true, "cancelled": false, "outcome": "Cancelled"}` | False: an old row, caught by the prefix fallback |
+| CX-03 | `is_contact` | `cancelled` false or missing, `outcome` "Answered" | True |
+| CX-04 | `is_cancelled` | `cancelled` True → True; False, missing or None → False | as stated |
+| CX-05 | `load_activity_index(client, now=NOW)` | Deal D: one **open** call with `cancelled: true`, due tomorrow | `index.open_by_deal` has no D, so the deal looks unactioned. Add a second open, not-cancelled row on D and it **is** in `open_by_deal` |
+| CX-06 | `load_activity_index` | Party P (no deal): one open `cancelled: true` row | `index.open_by_party` has no P |
+| CX-07 | `load_activity_index` | Deal D, party P: a **done** call 5 days ago with `cancelled: true`, outcome "Spoke to Pat" | Not contact: `last_contact_by_deal` has no D, `last_call_by_party` has no P, and `noncontact_done` is 1 |
+| CX-08 | `determine_next_action`, mode `CREATE_NEXT_ACTIONS` | The deal re-read (`deal_id`, `done: False`) returns only a `cancelled: true` row | `CREATED`; `create` called once (before the fix this was EXISTING) |
+| CX-09 | `determine_next_action`, create mode | The deal re-read returns a cancelled row **and** a live open row | `EXISTING`, and the returned record is the **live** row, not the cancelled one |
+| CX-10 | `determine_next_action`, create mode | The party re-read returns only a deal-less `cancelled: true` row | `CREATED` |
+| CX-11 | `harness.loop.open_activity_duplicate(client, {"entity": "Activity", "data": {"deal_id": D, "subject": "x", "done": false}})` | `list_` on D returns only a cancelled open row; the deal's party has nothing open | `None`, so the create may go ahead |
+| CX-12 | `open_activity_duplicate` | Same, but `list_` on D also returns a live open row | A message containing "already has an open Activity" and the **live** row's id |
+
+**How to build them:**
+- **CX-05 … CX-07:** `tests/keystone_support.py` has `ActivityClient(activities)`, a
+  client whose `list_("Activity")` returns the given rows, already used as
+  `asyncio.run(load_activity_index(ActivityClient(rows), now=now))`. Its
+  `activity(id=..., due_date=..., deal_id=..., party_id=..., done=1, type="call", **extra)`
+  builder takes `cancelled=True` and `outcome=...` as extras (`done` is 0/1 there, as on
+  the live platform).
+- **CX-11 / CX-12:** when the arguments carry `deal_id` but no `party_id`,
+  `open_activity_duplicate` calls `client.get("Deal", D)` to find the customer, so your
+  double must answer that `get` (a deal with a `party_id` whose re-read is empty).
+- **CX-08 … CX-12:** reuse the T2 client from your `test_remaining.py`, with re-read
+  rows that carry `"cancelled": True`.
+- **Shape matters:** the re-read uses `filters={"deal_id": D, "done": False}`. So if
+  your double filters by equality, give the rows `"done": False`, and do not add
+  `cancelled` to the filter: the code filters cancelled rows itself.
+
+Writing CX-01 … CX-12 gives about 12 tests (~1 h).
+
+---
+
 ## Checklist
 
 - [ ] T1 written and passing (NC-01 … NC-12)
@@ -241,6 +300,7 @@ write".
 - [ ] T3 written and passing (DG-01 … DG-05)
 - [ ] T4 written and passing (TB-01 … TB-04)
 - [ ] T5 V-A live verifier run on at least one instance; artifacts kept
+- [ ] T6 written and passing (CX-01 … CX-12)
 - [ ] Tell Claude the module names, so the docs (README matrix, tests/README, TEST_CASES, EVIDENCE) get updated
 - [ ] Commit and push to `main`
 

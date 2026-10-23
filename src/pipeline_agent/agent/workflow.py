@@ -55,10 +55,23 @@ PROVENANCE_MARKER = "created_by=pipeline_agent"
 CONTACT_TYPES = frozenset({"call", "meeting", "email"})
 
 
+def is_cancelled(activity: dict) -> bool:
+    """The platform's own cancelled flag (N478, Release 13, 2026-10-23).
+    Only an explicit True counts: rows from before the release carry False."""
+    return activity.get("cancelled") is True
+
+
 def is_contact(activity: dict) -> bool:
     """A completed row of a contact type that was not cancelled. Cancelling a
-    scheduled call marks it done, but nobody spoke to the customer."""
+    scheduled call marks it done, but nobody spoke to the customer.
+
+    Release 13 added `Activity.cancelled`, but did not migrate older rows:
+    127 Keystone and 9 Suryodaya rows cancelled before it still say so only
+    in `outcome` ("Cancelled ...") with `cancelled` false. So the flag is
+    checked first and the outcome prefix stays as the fallback for them."""
     if str(activity.get("type") or "").lower() not in CONTACT_TYPES:
+        return False
+    if is_cancelled(activity):
         return False
     return not str(activity.get("outcome") or "").strip().lower().startswith("cancel")
 
@@ -780,7 +793,9 @@ async def load_activity_index(client: MCPClient, *, page_size: int = 1000,
                             index.last_call_by_party[party_id] = day
                         if deal_id and _later(index.last_call_by_deal.get(deal_id), day):
                             index.last_call_by_deal[deal_id] = day
-            else:
+            elif not is_cancelled(activity):
+                # A cancelled row that was never completed is nobody's next
+                # action: counting it would hide a deal that needs one.
                 open_day = _iso_day(due)
                 if deal_id and open_day and open_day < today:
                     index.overdue_open_by_deal.setdefault(deal_id, []).append(open_day)
@@ -989,11 +1004,14 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
             reasons.append(f"the deal moved to '{current.get('stage')}' since it was read - "
                            f"not writing a next action for a stage it is no longer in")
             return ActionStatus.RECOMMENDED, proposed, reasons
-    recheck = await client.list_("Activity", filters={"deal_id": deal_id, "done": False}, limit=1)
-    if (recheck.get("records") if isinstance(recheck, dict) else None):
+    recheck = await client.list_("Activity", filters={"deal_id": deal_id, "done": False},
+                                 limit=100)
+    live = [a for a in ((recheck.get("records") or []) if isinstance(recheck, dict) else [])
+            if not is_cancelled(a)]
+    if live:
         reasons.append("a matching open Activity appeared between the check and the write - "
                         "not creating a duplicate")
-        return ActionStatus.EXISTING, recheck["records"][0], reasons
+        return ActionStatus.EXISTING, live[0], reasons
     # The same party-level rule as `index.open_activity`: an open Activity on
     # the customer with no deal set counts. Re-reading by deal_id alone let a
     # teammate's party-linked next action through, and the agent wrote a
@@ -1003,7 +1021,7 @@ async def determine_next_action(client: MCPClient, deal: dict, *, mode: Executio
         recheck = await client.list_("Activity", filters={"party_id": party_id, "done": False},
                                      limit=100)
         for activity in (recheck.get("records") or []) if isinstance(recheck, dict) else []:
-            if not activity.get("deal_id"):
+            if not activity.get("deal_id") and not is_cancelled(activity):
                 reasons.append("an open Activity for this deal's customer appeared between the "
                                "check and the write - not creating a duplicate")
                 return ActionStatus.EXISTING, activity, reasons

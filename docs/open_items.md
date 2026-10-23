@@ -273,14 +273,15 @@ Full report, including the eight platform bugs filed on 2026-09-24:
    cases (plan T5 in `docs/remainingtests.md`). Per the rubric an AI-authored
    test scores zero, so these stay with the team - see `tasks/README.md` and
    `tests/README.md`.
-7. **A real "Cancelled" Activity outcome is announced but not shipped** (instructor
-   N478, seen 2026-10-22). Rot will then count days since the last completed,
-   non-cancelled activity, and the instructor advises against text prefixes.
-   `workflow.is_contact` still excludes cancelled calls by an `outcome` that starts
-   with "cancel". Checked 2026-10-23: `outcome` is still a free string on both
-   instances, with no cancel field or status. When it ships, switch `is_contact` to
-   the new value (keep the prefix only for unmigrated rows) and re-compare
-   `_rot_days` with our own rot.
+7. **The "Cancelled" Activity flag shipped in Release 13** (instructor N478; seen
+   2026-10-23). `Activity.cancelled` is a boolean, but older rows were not migrated
+   (127 Keystone and 9 Suryodaya "Cancelled" outcomes still have `cancelled=false`).
+   Fixed on `main` 2026-10-23: `is_contact` checks the flag first and keeps the
+   outcome prefix as the fallback; a cancelled open row is not an open next action
+   (index, the re-read before a write, and the loop's duplicate guard). Live
+   canonical numbers are unchanged because no row has the flag yet. Still to do: the
+   team's tests (T6 in `docs/remainingtests.md`); re-compare `_rot_days` with our own
+   rot once rows carry the flag. The central submission (`136733a`) predates this.
 
 ## What IS checked, as of 2026-09-22
 
