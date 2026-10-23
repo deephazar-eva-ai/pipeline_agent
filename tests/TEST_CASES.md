@@ -5,7 +5,7 @@
 This catalogue describes the 21 executable test modules in this directory.
 The suite uses unit, stub, CLI, artifact, and hermetic MCP/REST-contract
 coverage by default. It does not create, update, or delete shared CRM
-records. The latest offline result is **462 passed in 0.42s on 2026-10-23**;
+records. The latest offline result is **478 passed in 0.53s on 2026-10-23**;
 the retained live read-only evidence is separately identified in
 [EVIDENCE.md](EVIDENCE.md).
 
@@ -35,6 +35,7 @@ The latest execution evidence is recorded in [EVIDENCE.md](EVIDENCE.md).
 | No recent contact (scored) | `test_remaining.py` | Never contacted; 30 days is recent and 31 is not; a future or unparseable date is insufficient evidence; days are counted in the company's timezone; cancelled calls and task/note rows are not contact; uncalled customers are one row per party, counted on calls only; never-called customers newer than the threshold go to `too_new`; never-called sort first. |
 | Concurrent change (scored) | `test_remaining.py` | In create mode a clean re-read creates exactly once with provenance; an open Activity on the deal, or a deal-less one on the customer, appearing before the write blocks it (EXISTING, no create); one on another deal does not block; a deal that changed stage is only RECOMMENDED; propose mode never re-reads or writes. |
 | Company-day due-date guard and central rows | `test_remaining.py` | A new Activity due today or later in ISO format passes, an earlier day or another format is refused, and "today" is the company's day, not UTC; a central task that times out or raises becomes a failed row; `results.json` is saved after each row; the loop task passes only when it ended `done`, read something and wrote nothing. |
+| Release 13 cancelled flag (N478) | `test_remaining.py` | `cancelled: true` makes a call non-contact even with an ordinary outcome, and an older "Cancelled" outcome row is still non-contact; only an explicit True counts; a cancelled open row is not an open next action for the deal or the customer; a cancelled completed call counts as non-contact; the re-read before a write and the loop's duplicate guard ignore cancelled rows but still find a live row beside one. 10 of these 16 cases fail on the code before the fix (`506444b`). |
 | Bug-hunt fixes 2026-10-13 | `test_emp_deal_rot_config.py` | Employee-only parties are excluded from deals, uncalled and leads and collapse to one `must_report` line; the live rot threshold is accepted only within 7–90 days, and a rejected or non-default value is disclosed (cases BH-EMP-01..05, BH-ROT-01..04). |
 
 ## Boundary and integration-contract cases

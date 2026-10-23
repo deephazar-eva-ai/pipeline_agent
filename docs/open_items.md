@@ -279,8 +279,8 @@ Full report, including the eight platform bugs filed on 2026-09-24:
    Fixed on `main` 2026-10-23: `is_contact` checks the flag first and keeps the
    outcome prefix as the fallback; a cancelled open row is not an open next action
    (index, the re-read before a write, and the loop's duplicate guard). Live
-   canonical numbers are unchanged because no row has the flag yet. Still to do: the
-   team's tests (T6 in `docs/remainingtests.md`); re-compare `_rot_days` with our own
+   canonical numbers are unchanged because no row has the flag yet. The team's tests
+   (T6) are in `tests/test_remaining.py`. Still to do: re-compare `_rot_days` with our own
    rot once rows carry the flag. The central submission (`136733a`) predates this.
 
 ## What IS checked, as of 2026-09-22

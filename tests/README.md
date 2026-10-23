@@ -1,7 +1,7 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 21 test modules and **462 passing tests**. The
+Agent. It currently contains 21 test modules and **478 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 the agent loop's token and time budgets and model retries, and Keystone-specific data
@@ -29,7 +29,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-10-23**: `462 passed in 0.42s`.
+The latest local execution was on **2026-10-23**: `478 passed in 0.53s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several
@@ -85,8 +85,9 @@ loaded only by the snapshot test, and contains no live tenant data.
   accept, and the task timeout capped by the deadline but not below its
   floor. Written by hand by the team.
 - `test_remaining.py` — part of the scored matrix (cases "no recent contact" and
-  "concurrent change"), plus the company-day due-date guard and the central
-  runner's failed rows, results file and loop pass rule. Plan and expected
+  "concurrent change"), plus the company-day due-date guard, the central
+  runner's failed rows, results file and loop pass rule, and the Release 13
+  `Activity.cancelled` flag (T6). Plan and expected
   results: `docs/remainingtests.md`. Written by hand by the team.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.

@@ -75,7 +75,7 @@ postcondition on the live platform.
 
 ### Offline regression suite
 
-`tests/` holds 462 offline tests in 21 modules (`.venv/bin/pytest tests -q`; 462 passed
+`tests/` holds 478 offline tests in 21 modules (`.venv/bin/pytest tests -q`; 478 passed
 on 2026-10-23). They cover the workflow, guards, preflight, transport, artifacts, the
 loop's token and time budgets and Keystone-specific contracts. Two modules,
 `test_pipeline_enhancements.py` and `test_remaining.py`, are part of the scored matrix
@@ -294,7 +294,7 @@ src/pipeline_agent/
   runner.py                    CLI entry point (Phase 4)
   central_runner.py            central evaluator entry point (agentswitch-harness.toml)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline suite, 462 tests in 21 modules; test_pipeline_enhancements.py and test_remaining.py are part of the scored matrix (see tests/README.md)
+tests/          offline suite, 478 tests in 21 modules; test_pipeline_enhancements.py and test_remaining.py are part of the scored matrix (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md, pipeline_agent_summary.md, IT-01 and central run records
 bugs/           filed platform bug records and bug-hunt fixtures
 agentswitch-harness.toml   central evaluator config

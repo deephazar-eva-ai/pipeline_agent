@@ -81,7 +81,7 @@ The runner's tasks are `canonical`, `preflight`, `loop` and `log-contact`. `log-
 |---|---|
 | `src/pipeline_agent/` | The agent, harness, MCP clients, preflight and CLI described above |
 | `tasks/` | `mandatory_refusal_task.py`: a human-authored scored task that probes the unavailable `Invoice` entity and verifies the refusal and that nothing changed, through direct REST snapshots. `run_refusal_task.sh` wraps it; see below. Also `task_schema.json` and the task-matrix `README.md` |
-| `tests/` | Offline suite: 21 modules, **462 passing** (2026-10-23). It covers the workflow, guards, preflight, transport, artifacts, the loop's token and time budgets and model retries, and Keystone-specific contracts. `test_pipeline_enhancements.py` and `test_remaining.py` (written by the team) are part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
+| `tests/` | Offline suite: 21 modules, **478 passing** (2026-10-23). It covers the workflow, guards, preflight, transport, artifacts, the loop's token and time budgets and model retries, and Keystone-specific contracts. `test_pipeline_enhancements.py` and `test_remaining.py` (written by the team) are part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
 | `gapreport/` | `crm_gapreport.md`: what the platform has, what competitors (Clarify, Monaco, Reevo) have that it lacks, and what an agent can close today. `deals_snapshot_schema.json`: the proposed `DealSnapshot` history table. `crm_gap_closure.pptx`: a 12-slide deck covering what exists, what is proposed, and the impact on schema and platform |
 | `bugs/` | `mybugs_all_2026-09-30.json`: the full `/api/bug-report/mine` export, refreshed 2026-10-19: 94 bugs (Suryodaya 50, Keystone 44), all `new`; two earlier reports the platform no longer lists are kept under `no_longer_listed`. `bughunt_filed_2026-10-13/16/17/22/23.json`: the bug-hunt filings' bodies and ids (10, 1, 1, 1, 1), with their fixtures, test cases (`bughunt_test_cases.md`) and the H4 probe script. `run3_bugfixes.md` and `run3_test_cases.md`: the IT-01 Run 3 fixes |
 | `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), IT-01 run records (`integration_testing_*`), complex-jobs records, central run records (`central_run_test_result.md`, `central_runs_4_to_6.md` covering Runs 4–7), plus a copy of the gap report |
@@ -141,7 +141,7 @@ On Suryodaya, most of the data issues are deals with no contact (66) or no owner
 
 ### Tests and bugs
 
-- **Tests:** offline suite, 462 passed (2026-10-23); 418 also passed on a clean Python 3.11 install on 2026-10-19.
+- **Tests:** offline suite, 478 passed (2026-10-23); 418 also passed on a clean Python 3.11 install on 2026-10-19.
 - **Bugs:** 96 filed (Suryodaya 50, Keystone 46): 94 in the 2026-10-19 export, all `new`, plus `bdec2b73` (2026-10-22) and `c9c9078a` (2026-10-23). `4681e718` was fixed by the platform (N489) and verified live on 2026-10-23. Two earlier reports are no longer listed by the platform: `279bea18` (superseded by `9268a84a`) and `cd26e205` (stage records since fixed or reseeded).
 
 ### Still open
