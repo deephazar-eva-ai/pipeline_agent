@@ -306,3 +306,64 @@ Full report, including the eight platform bugs filed on 2026-09-24:
   entities with the same message the live platform produces.
 - A preflight against an unreachable host returns `gate_g1: inconclusive`,
   never `sales_blocked` - a network fault is not a policy refusal.
+
+## Closing tasks for 2026-10-24 (harness deadline 23:59 IST)
+
+### State at the end of 2026-10-23
+
+| Item | State |
+|---|---|
+| Central submission | **Run 7 passed 14/14** on `136733a` (2026-10-23 10:40 IST, Keystone + Suryodaya, 174,121 tokens). Confirmed by the instructor ("your latest run passed 14/14"). This was the last allowed submission before the deadline; there's no window until 2026-10-26 |
+| Registered harness | `TeamHarness` on both instances: repo `deephazar-eva-ai/pipeline_agent`, branch `central-eval` (`90051a3`, docs only after `136733a`) |
+| `main` | `f3ef1c3`, pushed, clean. 478 offline tests pass |
+| Release 13 (2026-10-23) | Live. It fixed our 15–21 Oct reports, added the `endpoint.crm.owners` tool (235 tools) and `Activity.cancelled` (N478) |
+| `Activity.cancelled` | Handled on `main` (`b5244bf`); the team's tests T6 are in `tests/test_remaining.py` (`11e7f00`). Legacy "Cancelled" rows were not migrated (ks 127, su 9); the outcome-prefix fallback covers them. Live canonical numbers unchanged: ks 25 rotting / 8 uncalled, su 54 / 21 |
+| Bugs | **96 filed** (Suryodaya 50, Keystone 46). Latest: `c9c9078a` (`tools.preview`, 2026-10-23). `bdec2b73` (privacy requests) accepted by the instructor as N498, queued for Release 14. `4681e718` fixed (N489) |
+| Scored test matrix | Offline: rotting deal, existing/missing next action, bad stage data (`test_pipeline_enhancements.py`); no recent contact, concurrent change (`test_remaining.py`). Live: refusal task. Missing: live verifiers for the offline cases |
+
+### Tasks, in order (all optional; nothing is required for the submission)
+
+1. **Morning check (10 min).**
+   - `git fetch` in `pipeline_agent/`: `main` = `origin/main`, the working tree is clean.
+   - `.venv/bin/pytest tests -q`: 478 passed.
+   - Read the instructor channel for anything new (Release 14, replies on GA-05/GG-04).
+2. **T5 V-A live verifier, read-only (½ day, team-written).** See
+   `docs/remainingtests.md` T5. Run the canonical task in propose mode on one
+   instance, then recompute rotting deals and uncalled customers directly from the
+   platform. Assert set equality (excluding rows other teams changed during the run)
+   and zero writes. Keep the run artifacts. This is the last gap in the scored matrix
+   and helps the "harness rigor" grade most. V-B (writes) needs consent and the IT-01
+   fixtures, so skip it unless there is time.
+3. **Read-only probe of `endpoint.crm.owners` (30 min, Claude).** New in Release 13,
+   never probed. Compare `sales_only=true` against `AgentSeat`/`UserCompany` roles and
+   the owners actually on Deals/Leads/Activities. Draft any finding in
+   `EAG_V3_capstone/docnotshared/more_bughunt.md` §22 for approval before filing.
+4. **Decide on the drafted bug Q (5 min).** `more_bughunt.md` §20.1:
+   `ContactGroup.member_count` is wrong on all 15 seeded groups (ks + su). The live
+   counter works, so the seed bypassed it and the values never heal. Not filed (team
+   decision 2026-10-23). File it, or leave it.
+5. **Refresh the bug export (5 min, Claude).** `GET /api/bug-report/mine` on both
+   instances → update `bugs/mybugs_all_2026-09-30.json` (filename kept). Confirm 96
+   are listed and record any status changes (e.g. fixed or accepted).
+6. **Final docs pass (15 min, Claude).** Update the test count if new tests land;
+   the bug count after item 4/5; the README "Status" date. Commit and push `main`.
+   Optionally fast-forward `central-eval` to `main`. It's only docs plus the
+   cancelled-flag fix, and **no new central run** would be submitted.
+
+### Don'ts
+
+- **Don't submit another central run.** Keystone's `HarnessRun.list_mine` still
+  shows `can_submit: true`, because Run 7 was submitted through Suryodaya and the
+  3-day limit is kept per instance (the §19.1 draft). The rule is one submission per
+  team per 3 days. Run 7 is the final submission.
+- Don't add a `Co-Authored-By: Claude` trailer to commits that contain the team's
+  hand-written tests. Commit tests separately from Claude's changes.
+- Don't write to records other teams own; fixture writes only with consent, tagged
+  `[team07-test …]`.
+
+### After the deadline (not for 2026-10-24)
+
+- Once live rows carry `cancelled=true`, re-compare the platform's `_rot_days` with
+  our own rot (the instructor said rot will count days since the last completed,
+  non-cancelled activity).
+- `phase2-gap-fillup` stays unmerged (its write paths have never run live).
