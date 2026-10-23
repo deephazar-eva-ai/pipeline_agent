@@ -213,9 +213,11 @@ design are in [`docs/integration_testing_runs_consolidated.md`](docs/integration
 
 [`bugs/mybugs_all_2026-09-30.json`](bugs/mybugs_all_2026-09-30.json): the full
 `GET /api/bug-report/mine` export, refreshed 2026-10-19: 94 reports filed between
-2026-09-18 and 2026-10-17. One more was filed on 2026-10-22 (`bdec2b73`, privacy
-requests, Keystone; body in `bugs/bughunt_filed_2026-10-22.json`), so **95 reports in
-all**: Suryodaya 50, Keystone 45. The instructor has announced one as fixed:
+2026-09-18 and 2026-10-17. Two more were filed on Keystone after it: `bdec2b73`
+(2026-10-22, privacy requests; body in `bugs/bughunt_filed_2026-10-22.json`) and
+`c9c9078a` (2026-10-23, `tools.preview` reports `allowed` and `approval_required: false`
+for calls the commit refuses; body in `bugs/bughunt_filed_2026-10-23.json`), so
+**96 reports in all**: Suryodaya 50, Keystone 46. The instructor has announced one as fixed:
 `4681e718` (dates checked in UTC instead of the company's day), fixed as N489 and
 verified live on 2026-10-23. A few reports are addenda, corrections or design
 questions for the admin rather than separate bugs. Two earlier reports the platform
