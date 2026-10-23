@@ -1,6 +1,6 @@
 # Pipeline Agent: repository summary
 
-*As of 2026-10-19, branch `main` @ `89dc7b4`. The headline status is from 2026-10-19; the detailed canonical-task table is the 2026-10-03 live measurement. See [Current status](#current-status).*
+*As of 2026-10-23, branch `main` (central submission `136733a`). The headline status is from 2026-10-23; the detailed canonical-task table is the 2026-10-03 live measurement. See [Current status](#current-status).*
 
 Pipeline Agent is the capstone deliverable for **AgentSwitch Seat 07, Pipeline (CRM)**. It runs against the Suryodaya Precision Works tenant on `https://agentswitch.theschoolofai.in`, and has also been exercised on the Keystone tenant (`class.agentswitch.theschoolofai.in`). The repo contains a CRM agent, the harness that runs it and records evidence, and the supporting gap analysis, bug reports and tests.
 
@@ -81,10 +81,10 @@ The runner's tasks are `canonical`, `preflight`, `loop` and `log-contact`. `log-
 |---|---|
 | `src/pipeline_agent/` | The agent, harness, MCP clients, preflight and CLI described above |
 | `tasks/` | `mandatory_refusal_task.py`: a human-authored scored task that probes the unavailable `Invoice` entity and verifies the refusal and that nothing changed, through direct REST snapshots. `run_refusal_task.sh` wraps it; see below. Also `task_schema.json` and the task-matrix `README.md` |
-| `tests/` | Offline suite: 19 modules, **418 passing** (2026-10-19). It covers the workflow, guards, preflight, transport, artifacts, the loop's token budget and model retries, and Keystone-specific contracts. `test_pipeline_enhancements.py` (written by the team) is part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
+| `tests/` | Offline suite: 20 modules, **430 passing** (2026-10-23). It covers the workflow, guards, preflight, transport, artifacts, the loop's token and time budgets and model retries, and Keystone-specific contracts. `test_pipeline_enhancements.py` (written by the team) is part of the scored matrix; the other modules are regression tests and are not scored. See `tests/README.md`, `TEST_CASES.md` and `EVIDENCE.md` |
 | `gapreport/` | `crm_gapreport.md`: what the platform has, what competitors (Clarify, Monaco, Reevo) have that it lacks, and what an agent can close today. `deals_snapshot_schema.json`: the proposed `DealSnapshot` history table. `crm_gap_closure.pptx`: a 12-slide deck covering what exists, what is proposed, and the impact on schema and platform |
-| `bugs/` | `mybugs_all_2026-09-30.json`: the full `/api/bug-report/mine` export, refreshed 2026-10-19: 94 bugs (Suryodaya 50, Keystone 44), all `new`; two earlier reports the platform no longer lists are kept under `no_longer_listed`. `bughunt_filed_2026-10-13/16/17.json`: the bug-hunt filings' bodies and ids (10, 1, 1), with their fixtures, test cases (`bughunt_test_cases.md`) and the H4 probe script. `run3_bugfixes.md` and `run3_test_cases.md`: the IT-01 Run 3 fixes |
-| `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), IT-01 run records (`integration_testing_*`), complex-jobs records, central run records (`central_run_test_result.md`, `central_runs_4_to_6.md`), plus a copy of the gap report |
+| `bugs/` | `mybugs_all_2026-09-30.json`: the full `/api/bug-report/mine` export, refreshed 2026-10-19: 94 bugs (Suryodaya 50, Keystone 44), all `new`; two earlier reports the platform no longer lists are kept under `no_longer_listed`. `bughunt_filed_2026-10-13/16/17/22.json`: the bug-hunt filings' bodies and ids (10, 1, 1, 1), with their fixtures, test cases (`bughunt_test_cases.md`) and the H4 probe script. `run3_bugfixes.md` and `run3_test_cases.md`: the IT-01 Run 3 fixes |
+| `docs/` | `architecture.md`, `agent_contract.md` (input/output contract), `open_items.md` (measured status and open issues), `capstone_capability_enhancement_for_pipelineagent.md` (enhancement plan), IT-01 run records (`integration_testing_*`), complex-jobs records, central run records (`central_run_test_result.md`, `central_runs_4_to_6.md` covering Runs 4–7), plus a copy of the gap report |
 | `agentswitch-harness.toml` | Central evaluator config: install, run command, results file, instances (keystone, suryodaya), 30-minute timeout |
 | `runs/` | Run artifacts (gitignored) |
 
@@ -99,11 +99,11 @@ After those checks it runs the task's `run` then `verify` steps, and exits with 
 
 ## Current status
 
-### Latest (2026-10-19)
+### Latest (2026-10-23)
 
-- **Central evaluator: Run 6 passed 14/14** on `da9b7e8` (keystone 7/7, suryodaya 7/7; 158,532 tokens of the 300k per-run cap). Runs 4 and 5 failed: the evaluator's model returned 401s, and the Suryodaya loop hit the old 110k budget. The fixes were the wrap-up call, a 140k budget and the proxy-401 retry. Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md`.
+- **Central evaluator: Run 7 passed 14/14** on `136733a`, the final submission (keystone 7/7, suryodaya 7/7; 174,121 tokens of the 300k per-run cap; both loops ended `done`). Run 7 added the evaluator's time budget (`AGENTSWITCH_SECONDS_LEFT` / `AGENTSWITCH_DEADLINE`) and checks new Activity dates against the company's day instead of UTC, after the platform fixed `4681e718` (N489). Run 6 also passed 14/14 (`da9b7e8`). Runs 4 and 5 failed: the evaluator's model returned 401s, and the Suryodaya loop hit the old 110k budget. The fixes were the wrap-up call, a 140k budget and the proxy-401 retry. Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md` (Runs 4–7).
 - **IT-01: Run 3 passed** on 2026-10-12 (`docs/integration_testing_pipeline_run3.md`); its fixes are on `main`.
-- **Canonical task on the shared book** (2026-10-19, read-only): Keystone 25 rotting deals and 8 uncalled customers; Suryodaya 54 and 20. Part of the drop on Suryodaya since 2026-10-03 is that open deals whose only party is a company employee are now excluded (bug-hunt fix 31589ab3, 20 deals); the book has also aged since then.
+- **Canonical task on the shared book** (central Run 7, 2026-10-23, read-only): Keystone 25 rotting deals and 8 uncalled customers; Suryodaya 54 and 21. Part of the drop on Suryodaya since 2026-10-03 is that open deals whose only party is a company employee are now excluded (bug-hunt fix 31589ab3, 20 deals); the book has also aged since then.
 
 ### Canonical task on both tenants (2026-10-03)
 
@@ -133,7 +133,7 @@ On Suryodaya, most of the data issues are deals with no contact (66) or no owner
 ### Seat access
 
 - **Preflight passes on both tenants.** `G1=sales_reachable`; CRMPreferences, Deal and Activity are all readable.
-- **The tool catalogue has changed.** On 2026-10-19 the shared credential and the central evaluator's copies both serve **250** entity-scoped tools (261 on 2026-10-03, 263 in the evaluator for Runs 1–3), against a recorded baseline of 242, so preflight prints `CHANGED:`. The new tools haven't been reviewed yet. Once they are understood, update `RECORDED_TOOL_COUNT` (and `catalogue_baseline.json`).
+- **The tool catalogue has changed.** On 2026-10-23 the shared credential and the central evaluator's copies both serve **234** entity-scoped tools (250 on 2026-10-19, 261 on 2026-10-03, 263 in the evaluator for Runs 1–3), against a recorded baseline of 242, so preflight prints `CHANGED:`. The new tools haven't been reviewed yet. Once they are understood, update `RECORDED_TOOL_COUNT` (and `catalogue_baseline.json`).
 
 ### Refusal task
 
@@ -141,8 +141,8 @@ On Suryodaya, most of the data issues are deals with no contact (66) or no owner
 
 ### Tests and bugs
 
-- **Tests:** offline suite, 418 passed (2026-10-19), also on a clean Python 3.11 install.
-- **Bugs:** 94 filed and listed on 2026-10-19 (Suryodaya 50, Keystone 44), all still `new`. Two earlier reports are no longer listed by the platform: `279bea18` (superseded by `9268a84a`) and `cd26e205` (stage records since fixed or reseeded).
+- **Tests:** offline suite, 430 passed (2026-10-23); 418 also passed on a clean Python 3.11 install on 2026-10-19.
+- **Bugs:** 95 filed (Suryodaya 50, Keystone 45): 94 in the 2026-10-19 export, all `new`, plus `bdec2b73` filed 2026-10-22. `4681e718` was fixed by the platform (N489) and verified live on 2026-10-23. Two earlier reports are no longer listed by the platform: `279bea18` (superseded by `9268a84a`) and `cd26e205` (stage records since fixed or reseeded).
 
 ### Still open
 

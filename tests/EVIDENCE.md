@@ -4,11 +4,11 @@
 
 | Field | Evidence |
 |---|---|
-| Date | 2026-10-19 |
-| Working directory | `pipeline_agent/` (branch `main` @ `89dc7b4`) |
+| Date | 2026-10-23 |
+| Working directory | `pipeline_agent/` (branch `main`; code as submitted in `136733a`) |
 | Command | `.venv/bin/pytest tests -q` |
-| Result | **418 passed** in 0.35s |
-| Python 3.11 check | A clean `pip install .` of `central-eval` @ `da9b7e8` into a fresh Python 3.11.15 venv: 418 passed, central dry run 4/4 |
+| Result | **430 passed** in 0.53s |
+| Python 3.11 check | Last done on 2026-10-19: a clean `pip install .` of `central-eval` @ `da9b7e8` into a fresh Python 3.11.15 venv: 418 passed, central dry run 4/4 |
 | CRM effects | None. The suite is offline; no live CRM call or write-mode execution was performed. |
 
 ## Evidence by module
@@ -32,21 +32,25 @@
 | `test_emp_deal_rot_config.py` | Bug-hunt fixes 31589ab3 (employee-only parties excluded) and 66f96caa (`deal_rot_days` range 7–90, disclosure of rejected or non-default values). |
 | `test_token_budget.py` | Loop hard token budget: stop on reported or estimated usage, no success over budget, no limit without a budget. |
 | `test_loop_wrapup.py` | Budget wrap-up call, single wrap-up chance, proxy upstream 401 retried once, plain 401 not retried, central model-probe retry, central 140k budget. |
+| `test_time_wrapup.py` | Time-budget wrap-up call, single chance, no wrap-up without a deadline, evaluator deadline parsing, task timeout capped by the deadline with a floor. |
 
 ## Latest recorded live read-only verification
 
-The latest live evidence is the 2026-10-19 local run of the central runner on
-`da9b7e8`, against the shared book on both instances, read-only, with
-`anthropic/claude-sonnet-4.6` via OpenRouter. It was not rerun by the offline
+The latest live evidence is the 2026-10-23 01:13 IST local run of the central
+runner on `136733a` (a clean `git archive` export, `AGENTSWITCH_SECONDS_LEFT=1800`),
+against the shared book on both instances, read-only, with
+`anthropic/claude-sonnet-4.6` via OpenRouter, followed by the evaluator's own
+central Run 7 of the same commit. It was not rerun by the offline
 test command above. No run folder was kept: the central runner writes only
 `results.json`.
 
 | Check | Result |
 |---|---|
-| Keystone | 7/7: preflight tools=250, `G1=sales_reachable`; canonical 25 rotting deals, 8 uncalled customers, 13 tool calls, 0 writes; loop `done` in 2 calls, 19,291 of 140,000 tokens |
-| Suryodaya | 7/7: preflight tools=250; canonical 54 rotting deals, 20 uncalled customers, 13 tool calls, 0 writes; loop `done` in 3 calls, 49,132 of 140,000 tokens |
-| Budget wrap-up | Suryodaya with the budget forced to 40k: loop still ended `done` (49,333 tokens), so the wrap-up call works on a real model |
-| Central Run 6 | The evaluator's own run of `da9b7e8` matched: 14/14, ks 25/8, su 54/20, 0 writes |
+| Keystone | 7/7: preflight tools=234, `G1=sales_reachable`; canonical 25 rotting deals, 8 uncalled customers, 0 writes; loop `done` in 2 calls, 19,610 of 140,000 tokens |
+| Suryodaya | 7/7: preflight tools=234; canonical 54 rotting deals, 20 uncalled customers, 0 writes; loop `done` in 3 calls, 47,978 of 140,000 tokens, 0 unsupported figures |
+| Company-day date check | Before committing it, a completed Suryodaya call dated the IST day at 01:13 IST was accepted by the platform (201; 422 before N489) |
+| Central Run 7 | The evaluator's own run of `136733a` (2026-10-23 10:40 IST): 14/14, ks 25/8, su 54/21, 12 canonical tool calls each, 0 writes, both loops `done`, 174,121 tokens |
+| Earlier (2026-10-19, `da9b7e8`) | Local 7/7 on both instances (tools=250, ks 25/8, su 54/20); Suryodaya with the budget forced to 40k still ended `done`, so the token wrap-up works on a real model; central Run 6 14/14 |
 
 ### Earlier live evidence (2026-10-07)
 

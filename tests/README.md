@@ -1,10 +1,10 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 19 test modules and **418 passing tests**. The
+Agent. It currently contains 20 test modules and **430 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
-the agent loop's token budget and model retries, and Keystone-specific data
+the agent loop's token and time budgets and model retries, and Keystone-specific data
 and tenant contracts.
 
 One module, `test_pipeline_enhancements.py`, is part of the scored task matrix:
@@ -29,7 +29,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-10-19**: `418 passed in 0.35s`.
+The latest local execution was on **2026-10-23**: `430 passed in 0.53s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several
@@ -79,13 +79,18 @@ loaded only by the snapshot test, and contains no live tenant data.
   only one chance), the single retry of the evaluator proxy's upstream 401,
   no retry of a plain 401, the central model probe's retry, and the central
   140k budget. Written by hand by the team.
+- `test_time_wrapup.py` — the evaluator's time budget: a predicted overrun of
+  the deadline asks for one final answer, only one chance, no deadline means
+  no wrap-up, the formats `AGENTSWITCH_SECONDS_LEFT` / `AGENTSWITCH_DEADLINE`
+  accept, and the task timeout capped by the deadline but not below its
+  floor. Written by hand by the team.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.
 
 ## Live verification
 
 Tests are offline by default and do not create CRM records. The most recent
-recorded live read-only verification is dated 2026-10-19 in
+recorded live read-only verification is dated 2026-10-23 in
 [EVIDENCE.md](EVIDENCE.md); it was not rerun as part of the offline suite.
 Live preflight and canonical propose-mode verification require
 `AGENTSWITCH_MCP_URL` and `AGENTSWITCH_MCP_TOKEN`. Use `--exec-mode propose`

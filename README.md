@@ -75,10 +75,10 @@ postcondition on the live platform.
 
 ### Offline regression suite
 
-`tests/` holds 418 offline tests in 19 modules (`.venv/bin/pytest tests -q`; 418 passed
-on 2026-10-19). They cover the workflow, guards, preflight, transport, artifacts, the
-loop's token budget and Keystone-specific contracts. One module,
-`test_pipeline_enhancements.py`, is part of the scored matrix (above). The other 18 are
+`tests/` holds 430 offline tests in 20 modules (`.venv/bin/pytest tests -q`; 430 passed
+on 2026-10-23). They cover the workflow, guards, preflight, transport, artifacts, the
+loop's token and time budgets and Keystone-specific contracts. One module,
+`test_pipeline_enhancements.py`, is part of the scored matrix (above). The other 19 are
 regression tests that protect the code and are not scored. None of them can prove a
 postcondition on the live platform. See `tests/README.md`.
 
@@ -113,6 +113,12 @@ retries a 429, a 5xx, or the evaluator proxy's upstream 401 (`"The model provide
 answered 401."`) once after 10 seconds. A plain 401 for our own key fails straight
 away.
 
+The runner also respects the evaluator's time budget (`AGENTSWITCH_SECONDS_LEFT` /
+`AGENTSWITCH_DEADLINE`). Each task's limit is capped at the time left minus 20 seconds,
+and when another loop round would not finish 30 seconds before that, the loop makes the
+same single wrap-up call and ends `time_budget` if the model still has no answer.
+Without either variable the fixed limits apply.
+
 To try it locally without the evaluator: `python -m pipeline_agent.central_runner --dry-run`
 (stub MCP client, model tasks skipped). The submission branch is `central-eval`.
 
@@ -123,8 +129,9 @@ To try it locally without the evaluator: `python -m pipeline_agent.central_runne
 | 4 | 2026-10-18 | `3f91478` | Failed: the evaluator's model returned a 401 on the probe |
 | 5 | 2026-10-19 | `6351813` | Failed: the Suryodaya loop hit the 110k budget; Keystone got the provider 401 mid-loop |
 | 6 | 2026-10-19 | `da9b7e8` | **14/14**, 158,532 tokens |
+| 7 | 2026-10-23 | `136733a` | **14/14**, 174,121 tokens (time budget + company-day date check; final submission) |
 
-Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md`.
+Records: `docs/central_run_test_result.md` (Run 3) and `docs/central_runs_4_to_6.md` (Runs 4–7).
 A central pass shows the harness installs and runs in the evaluator. It is not IT-01
 evidence.
 
@@ -205,10 +212,14 @@ design are in [`docs/integration_testing_runs_consolidated.md`](docs/integration
 ### Platform bugs filed
 
 [`bugs/mybugs_all_2026-09-30.json`](bugs/mybugs_all_2026-09-30.json): the full
-`GET /api/bug-report/mine` export, refreshed 2026-10-19. **94 reports**: Suryodaya 50,
-Keystone 44, all still `new`, filed between 2026-09-18 and 2026-10-17. A few are
-addenda, corrections or design questions for the admin rather than separate bugs.
-Two earlier reports the platform no longer lists are kept under `no_longer_listed`.
+`GET /api/bug-report/mine` export, refreshed 2026-10-19: 94 reports filed between
+2026-09-18 and 2026-10-17. One more was filed on 2026-10-22 (`bdec2b73`, privacy
+requests, Keystone; body in `bugs/bughunt_filed_2026-10-22.json`), so **95 reports in
+all**: Suryodaya 50, Keystone 45. The instructor has announced one as fixed:
+`4681e718` (dates checked in UTC instead of the company's day), fixed as N489 and
+verified live on 2026-10-23. A few reports are addenda, corrections or design
+questions for the admin rather than separate bugs. Two earlier reports the platform
+no longer lists are kept under `no_longer_listed`.
 
 | Theme | Examples |
 |---|---|
@@ -223,12 +234,12 @@ The bug-hunt filings' bodies and fixtures are in [`bugs/`](bugs/), with test cas
 
 ## Status
 
-Latest status (2026-10-19):
+Latest status (2026-10-23):
 [`docs/pipeline_agent_summary.md`](docs/pipeline_agent_summary.md). In short: central
-Run 6 passed 14/14 on `da9b7e8`; IT-01 Run 3 passed on 2026-10-12
+Run 7, the final submission, passed 14/14 on `136733a`; IT-01 Run 3 passed on 2026-10-12
 (`docs/integration_testing_pipeline_run3.md`); on the shared book the canonical task
-reports 25 rotting deals and 8 uncalled customers on Keystone, and 54 and 20 on
-Suryodaya (2026-10-19, read-only). The notes below are the 2026-09-22 milestones.
+reports 25 rotting deals and 8 uncalled customers on Keystone, and 54 and 21 on
+Suryodaya (central Run 7, 2026-10-23, read-only). The notes below are the 2026-09-22 milestones.
 
 As of 2026-09-22 the agent answers the canonical question against the **live**
 Suryodaya book: 81 rotting deals out of 133, with contact status and a next
@@ -280,7 +291,7 @@ src/pipeline_agent/
   runner.py                    CLI entry point (Phase 4)
   central_runner.py            central evaluator entry point (agentswitch-harness.toml)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline suite, 418 tests in 19 modules; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
+tests/          offline suite, 430 tests in 20 modules; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md, pipeline_agent_summary.md, IT-01 and central run records
 bugs/           filed platform bug records and bug-hunt fixtures
 agentswitch-harness.toml   central evaluator config
