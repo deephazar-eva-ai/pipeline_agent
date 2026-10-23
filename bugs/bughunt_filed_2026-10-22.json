@@ -1,0 +1,15 @@
+[
+ {
+  "instance": "keystone",
+  "instance_url": "https://class.agentswitch.theschoolofai.in",
+  "filed_at": "2026-10-22",
+  "id": "bdec2b73-7839-4919-96fd-e112f0b37222",
+  "delivery": "local",
+  "issue_number": null,
+  "issue_url": null,
+  "note": "Your report was saved and the AgentSwitch team will review it. Track it with BugReport.list or GET /api/bug-report/mine.",
+  "description": "Privacy requests get no deadline and no audit trail: due_on is never set, no PrivacyAuditEvent is written, a future received_at is accepted and the request type can be switched silently (MEDIUM)\n\nWhat happened (2026-10-22 09:44 UTC, MCP as team07):\n- PrivacyRequest.create {party_id: <team07 test party>, request_type: \"export\", received_at: \"2026-10-22\"}\n  \u2192 9ec61249, status \"received\", due_on null. due_on is in _readonly_fields (server-owned), and is\n  still null on every later read. Same on Suryodaya (9d78bb92).\n- received_at \"2020-01-01\" (150815a7) \u2192 accepted, due_on null; nothing marks it years overdue.\n- received_at \"2027-06-01\" \u2192 accepted on create (29274ccc) and on update (9ec61249).\n- PrivacyRequest.update request_type \"export\" \u2192 \"erasure\" on 9ec61249 \u2192 accepted.\n- PrivacyAuditEvent.list \u2192 0 rows on both instances after all of the above, although its kind\n  enum includes \"received\".\nRefused correctly: nonexistent or other-tenant party, other-tenant company_id, 2026-02-30.\n\nExpected: a privacy request carries its statutory deadline from receipt (due_on, e.g. 30/45\ndays), cannot be received in the future, and every receipt and change of type is recorded in\nthe append-only PrivacyAuditEvent log.\n\nImpact: data-subject requests can be logged with no deadline, so nothing can flag them as\noverdue; the audit log that should prove when a request arrived and what it asked for is\nempty; an export request can become an erasure (or the reverse) with no record; a backdated\nor future receipt date moves the deadline. Agents reading these records get no due date to\nact on.\n\nReproduce: PrivacyRequest.create on any party you can read; PrivacyRequest.get \u2192 due_on null;\nPrivacyAuditEvent.list \u2192 no \"received\" event. Update received_at to a future date \u2192 accepted.\n\nScope checked: MCP create/update/get/list, both instances. REST and any UI fulfilment flow not\ntested (status/outcome are read-only to this seat; no transition tool is exposed).\nFixtures: [team07-test BH-20261022] PrivacyRequest ks 9ec61249, 29274ccc, 150815a7; su 9d78bb92\n(notes say test fixture, do not action; this seat cannot delete or withdraw them).",
+  "page": "CRM:Privacy requests",
+  "agent_seat": "07 Pipeline"
+ }
+]
