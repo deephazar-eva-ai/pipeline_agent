@@ -1,15 +1,15 @@
 # Pipeline Agent tests
 
 This directory contains the runnable, offline regression suite for Pipeline
-Agent. It currently contains 20 test modules and **430 passing tests**. The
+Agent. It currently contains 21 test modules and **462 passing tests**. The
 suite covers deterministic workflow behavior, preflight and request guards,
 stub clients, CLI startup, artifacts, MCP/REST boundaries, LLM configuration,
 the agent loop's token and time budgets and model retries, and Keystone-specific data
 and tenant contracts.
 
-One module, `test_pipeline_enhancements.py`, is part of the scored task matrix:
-the team wrote it by hand, and the root `README.md` maps its tests to the matrix
-cases. The other modules are regression tests and are not scored. No test here
+Two modules, `test_pipeline_enhancements.py` and `test_remaining.py`, are part of
+the scored task matrix: the team wrote them by hand, and the root `README.md` maps
+their tests to the matrix cases. The other modules are regression tests and are not scored. No test here
 can prove a shared-CRM postcondition, because everything runs offline. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
 [EVIDENCE.md](EVIDENCE.md) for the latest execution record, and
 [US_ENTITY_SNAPSHOT_SCHEMA.md](US_ENTITY_SNAPSHOT_SCHEMA.md) for the synthetic
@@ -29,7 +29,7 @@ Use verbose output when diagnosing a failure:
 .venv/bin/pytest tests -v
 ```
 
-The latest local execution was on **2026-10-23**: `430 passed in 0.53s`.
+The latest local execution was on **2026-10-23**: `462 passed in 0.42s`.
 
 The suite is source-layout compatible: `conftest.py` makes `src/` importable,
 and `__init__.py` intentionally keeps `tests` a package because several
@@ -84,6 +84,10 @@ loaded only by the snapshot test, and contains no live tenant data.
   no wrap-up, the formats `AGENTSWITCH_SECONDS_LEFT` / `AGENTSWITCH_DEADLINE`
   accept, and the task timeout capped by the deadline but not below its
   floor. Written by hand by the team.
+- `test_remaining.py` — part of the scored matrix (cases "no recent contact" and
+  "concurrent change"), plus the company-day due-date guard and the central
+  runner's failed rows, results file and loop pass rule. Plan and expected
+  results: `docs/remainingtests.md`. Written by hand by the team.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.
 

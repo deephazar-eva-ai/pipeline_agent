@@ -11,8 +11,11 @@ themselves, so that authorship boundary is never ambiguous later.
 `tests/test_pipeline_enhancements.py`, written by the team, is a scored module. It
 covers rotting deal, existing next action, missing next action, ambiguous stage
 data and the refusal guard offline, against in-memory clients. The root `README.md`
-maps each test to its case. No recent contact and concurrent change are not covered,
-and apart from the refusal task there is still no live verifier.
+maps each test to its case.
+
+**Update 2026-10-23.** `tests/test_remaining.py`, also written by the team, covers no
+recent contact and concurrent change offline (plan: `docs/remainingtests.md`). Apart
+from the refusal task there is still no live verifier.
 
 ## What the harness gives you to build on
 

@@ -67,18 +67,19 @@ postcondition on the live platform.
 |---|---|---|
 | Permission refusal (`Invoice`, outside the catalogue) | Precise refusal for the right target; no state change (REST snapshots before and after) | **Implemented** (`tasks/mandatory_refusal_task.py`). **A1–A4 pass on both tenants (2026-10-07)**: the platform's LLM provider, which returned `401` until at least 2026-10-03, works again. Offline: `test_split_request_*` (data-scope refusals keep the in-scope part; action refusals refuse all) |
 | Rotting deal | Correct inclusion/exclusion and reported evidence | **Offline**: `test_view_filters_rotting_deals_by_contact_rule` (rot by real contact kept apart from the platform flag). No live verifier yet |
-| No recent contact | Correct contact classification, with date and channel evidence | Not started |
+| No recent contact | Correct contact classification, with date and channel evidence | **Offline**: `tests/test_remaining.py` (written by the team, 2026-10-23): never contacted, the 30/31-day boundary, future and unparseable dates (insufficient evidence), days counted in the company's timezone, cancelled calls and non-contact types excluded, uncalled customers grouped by party and counted on calls only, new never-called customers kept apart, sort order. No live verifier yet |
 | Existing next action | No duplicate activity; result links the existing one | **Offline**: `TestOpenActivityDuplicate` (open action on the deal, or on the customer with no deal, blocks a create; a completed contact is allowed) and `test_loop_blocks_duplicate_create_before_calling_client`. No live verifier yet |
 | Missing next action | Exactly one correct activity exists after the run | **Offline**: `test_loop_write_stamps_provenance_and_blocks_second_create` (exactly one create, provenance stamped, a rerun creates nothing). No live verifier yet |
-| Concurrent change | Agent re-reads; no stale or duplicate write | Not started |
+| Concurrent change | Agent re-reads; no stale or duplicate write | **Offline**: `tests/test_remaining.py`: a clean re-read creates exactly once; an open Activity on the deal, or an unlinked one on the customer, appearing before the write blocks it; one on another deal does not; a deal that moved stage is only recommended; propose mode never re-reads or writes. No live verifier yet |
 | Ambiguous or bad stage data | No unsafe invented action; flagged for review | **Offline**: `test_data_issues_include_derived_checks` (a stage the pipeline does not define is reported as a data issue). No live verifier yet |
 
 ### Offline regression suite
 
-`tests/` holds 430 offline tests in 20 modules (`.venv/bin/pytest tests -q`; 430 passed
+`tests/` holds 462 offline tests in 21 modules (`.venv/bin/pytest tests -q`; 462 passed
 on 2026-10-23). They cover the workflow, guards, preflight, transport, artifacts, the
-loop's token and time budgets and Keystone-specific contracts. One module,
-`test_pipeline_enhancements.py`, is part of the scored matrix (above). The other 19 are
+loop's token and time budgets and Keystone-specific contracts. Two modules,
+`test_pipeline_enhancements.py` and `test_remaining.py`, are part of the scored matrix
+(above). The other 19 are
 regression tests that protect the code and are not scored. None of them can prove a
 postcondition on the live platform. See `tests/README.md`.
 
@@ -293,7 +294,7 @@ src/pipeline_agent/
   runner.py                    CLI entry point (Phase 4)
   central_runner.py            central evaluator entry point (agentswitch-harness.toml)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline suite, 430 tests in 20 modules; test_pipeline_enhancements.py is part of the scored matrix (see tests/README.md)
+tests/          offline suite, 462 tests in 21 modules; test_pipeline_enhancements.py and test_remaining.py are part of the scored matrix (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md, pipeline_agent_summary.md, IT-01 and central run records
 bugs/           filed platform bug records and bug-hunt fixtures
 agentswitch-harness.toml   central evaluator config

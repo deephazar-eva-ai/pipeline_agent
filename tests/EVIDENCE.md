@@ -7,7 +7,7 @@
 | Date | 2026-10-23 |
 | Working directory | `pipeline_agent/` (branch `main`; code as submitted in `136733a`) |
 | Command | `.venv/bin/pytest tests -q` |
-| Result | **430 passed** in 0.53s |
+| Result | **462 passed** in 0.42s |
 | Python 3.11 check | Last done on 2026-10-19: a clean `pip install .` of `central-eval` @ `da9b7e8` into a fresh Python 3.11.15 venv: 418 passed, central dry run 4/4 |
 | CRM effects | None. The suite is offline; no live CRM call or write-mode execution was performed. |
 
@@ -33,6 +33,7 @@
 | `test_token_budget.py` | Loop hard token budget: stop on reported or estimated usage, no success over budget, no limit without a budget. |
 | `test_loop_wrapup.py` | Budget wrap-up call, single wrap-up chance, proxy upstream 401 retried once, plain 401 not retried, central model-probe retry, central 140k budget. |
 | `test_time_wrapup.py` | Time-budget wrap-up call, single chance, no wrap-up without a deadline, evaluator deadline parsing, task timeout capped by the deadline with a floor. |
+| `test_remaining.py` | Scored cases "no recent contact" and "concurrent change" (contact classification, uncalled customers, re-read before write), company-day due-date guard, central runner failed rows, results file saved per row, loop pass rule. |
 
 ## Latest recorded live read-only verification
 

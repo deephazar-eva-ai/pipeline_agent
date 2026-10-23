@@ -2,10 +2,10 @@
 
 ## Scope
 
-This catalogue describes the 20 executable test modules in this directory.
+This catalogue describes the 21 executable test modules in this directory.
 The suite uses unit, stub, CLI, artifact, and hermetic MCP/REST-contract
 coverage by default. It does not create, update, or delete shared CRM
-records. The latest offline result is **430 passed in 0.53s on 2026-10-23**;
+records. The latest offline result is **462 passed in 0.42s on 2026-10-23**;
 the retained live read-only evidence is separately identified in
 [EVIDENCE.md](EVIDENCE.md).
 
@@ -32,6 +32,9 @@ The latest execution evidence is recorded in [EVIDENCE.md](EVIDENCE.md).
 | Loop token budget | `test_token_budget.py` | The loop ends as `token_budget` once reported or estimated usage reaches the budget, a model's `done` over budget is not a success, and no budget means no limit. |
 | Budget wrap-up and model retries | `test_loop_wrapup.py` | A predicted overrun triggers exactly one final no-tools call; a non-answer on it ends the run; the proxy's upstream 401 is retried once, a plain 401 is not; the central model probe retries once; the central budget is 140k. |
 | Time budget wrap-up | `test_time_wrapup.py` | A predicted deadline overrun triggers exactly one final no-tools call; no deadline means no wrap-up; `AGENTSWITCH_SECONDS_LEFT` / `AGENTSWITCH_DEADLINE` formats are parsed and unusable values ignored; the task timeout is capped by the deadline but not below its floor. |
+| No recent contact (scored) | `test_remaining.py` | Never contacted; 30 days is recent and 31 is not; a future or unparseable date is insufficient evidence; days are counted in the company's timezone; cancelled calls and task/note rows are not contact; uncalled customers are one row per party, counted on calls only; never-called customers newer than the threshold go to `too_new`; never-called sort first. |
+| Concurrent change (scored) | `test_remaining.py` | In create mode a clean re-read creates exactly once with provenance; an open Activity on the deal, or a deal-less one on the customer, appearing before the write blocks it (EXISTING, no create); one on another deal does not block; a deal that changed stage is only RECOMMENDED; propose mode never re-reads or writes. |
+| Company-day due-date guard and central rows | `test_remaining.py` | A new Activity due today or later in ISO format passes, an earlier day or another format is refused, and "today" is the company's day, not UTC; a central task that times out or raises becomes a failed row; `results.json` is saved after each row; the loop task passes only when it ended `done`, read something and wrote nothing. |
 | Bug-hunt fixes 2026-10-13 | `test_emp_deal_rot_config.py` | Employee-only parties are excluded from deals, uncalled and leads and collapse to one `must_report` line; the live rot threshold is accepted only within 7–90 days, and a rejected or non-default value is disclosed (cases BH-EMP-01..05, BH-ROT-01..04). |
 
 ## Boundary and integration-contract cases
