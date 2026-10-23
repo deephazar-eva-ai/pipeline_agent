@@ -16,10 +16,14 @@ from pipeline_agent.agent.workflow import (
     classify_contact,
     determine_next_action,
     find_uncalled,
+    is_cancelled,
     is_contact,
+    load_activity_index,
 )
-from pipeline_agent.harness.loop import call_shape_error
+from pipeline_agent.harness.loop import call_shape_error, open_activity_duplicate
 from pipeline_agent.mcp.client import MCPClient
+
+from .keystone_support import ActivityClient, activity
 
 NOW = dt.datetime(2026, 10, 7, 12, tzinfo=dt.timezone.utc)
 THRESHOLD = 30
@@ -350,3 +354,111 @@ def test_check_loop_passes_only_a_finished_read_only_run(monkeypatch, ended, exp
     assert f"ended={ended}" in evidence
     assert "tool steps=1" in evidence
     assert "writes=0" in evidence
+
+
+# --- cancelled flag on Activities (Release 13 / N478) -------------------------
+
+TOMORROW = (NOW + dt.timedelta(days=1)).date().isoformat()
+CREATE_ON_D1 = {"entity": "Activity", "data": {"deal_id": "D1", "subject": "x", "done": False}}
+
+
+def index_of(*rows):
+    return run(load_activity_index(ActivityClient(list(rows)), now=NOW))
+
+
+def cancelled_row(**fields):
+    return {"id": "cancelled", "done": False, "cancelled": True, **fields}
+
+
+def test_cancelled_flag_beats_a_normal_outcome():
+    assert not is_contact({"type": "call", "done": True, "cancelled": True, "outcome": "Spoke to Pat"})
+
+
+def test_cancelled_outcome_still_works_for_older_rows():
+    # Rows from before the flag existed only have the outcome text.
+    assert not is_contact({"type": "call", "done": True, "cancelled": False, "outcome": "Cancelled"})
+
+
+@pytest.mark.parametrize("extra", [{"cancelled": False}, {}], ids=["false", "missing"])
+def test_answered_call_is_contact(extra):
+    assert is_contact({"type": "call", "done": True, "outcome": "Answered", **extra})
+
+
+@pytest.mark.parametrize("activity, expected", [
+    ({"cancelled": True}, True),
+    ({"cancelled": False}, False),
+    ({"cancelled": None}, False),
+    ({}, False),
+], ids=["true", "false", "none", "missing"])
+def test_is_cancelled_only_on_true(activity, expected):
+    assert is_cancelled(activity) is expected
+
+
+def test_cancelled_deal_activity_is_not_an_open_next_action():
+    cancelled = activity(id="cancelled", due_date=TOMORROW, deal_id="D", done=0, cancelled=True)
+    live = activity(id="live", due_date=TOMORROW, deal_id="D", done=0)
+
+    assert "D" not in index_of(cancelled).open_by_deal
+    assert index_of(cancelled, live).open_by_deal["D"] is live
+
+
+def test_cancelled_party_activity_is_not_an_open_next_action():
+    index = index_of(activity(id="cancelled", due_date=TOMORROW, party_id="P", done=0, cancelled=True))
+
+    assert "P" not in index.open_by_party
+
+
+def test_cancelled_completed_call_only_counts_as_noncontact():
+    index = index_of(activity(
+        id="cancelled", due_date="2026-10-02", deal_id="D", party_id="P", done=1,
+        cancelled=True, outcome="Spoke to Pat",
+    ))
+
+    assert "D" not in index.last_contact_by_deal
+    assert "P" not in index.last_call_by_party
+    assert index.noncontact_done == 1
+
+
+def test_reread_ignores_cancelled_deal_activity():
+    client = ReReadClient(by_deal=[cancelled_row(deal_id="D1")])
+
+    status, _, _ = next_action(client, "cancelled-deal-reread")
+
+    assert status is ActionStatus.CREATED
+    assert len(client.created) == 1
+
+
+def test_reread_finds_live_deal_activity_behind_cancelled_one():
+    live = {"id": "live", "deal_id": "D1", "done": False, "cancelled": False}
+    client = ReReadClient(by_deal=[cancelled_row(deal_id="D1"), live])
+
+    status, record, _ = next_action(client, "live-deal-reread")
+
+    assert status is ActionStatus.EXISTING
+    assert record is live
+    assert client.created == []
+
+
+def test_reread_ignores_cancelled_party_activity():
+    client = ReReadClient(by_party=[cancelled_row(party_id="P1")])
+
+    status, _, _ = next_action(client, "cancelled-party-reread")
+
+    assert status is ActionStatus.CREATED
+    assert len(client.created) == 1
+
+
+def test_duplicate_guard_ignores_cancelled_deal_activity():
+    client = ReReadClient(current_deal=proposal_deal(), by_deal=[cancelled_row(deal_id="D1")])
+
+    assert run(open_activity_duplicate(client, CREATE_ON_D1)) is None
+
+
+def test_duplicate_guard_reports_live_row_behind_cancelled_one():
+    live = {"id": "live", "deal_id": "D1", "done": False, "subject": "Call Pat", "due_date": "2026-10-08"}
+    client = ReReadClient(current_deal=proposal_deal(), by_deal=[cancelled_row(deal_id="D1"), live])
+
+    duplicate = run(open_activity_duplicate(client, CREATE_ON_D1))
+
+    assert "already has an open Activity" in duplicate
+    assert "id live" in duplicate
