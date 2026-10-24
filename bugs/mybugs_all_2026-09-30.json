@@ -3,8 +3,8 @@
  "source": "GET /api/bug-report/mine",
  "counts": {
   "suryodaya": 50,
-  "keystone": 46,
-  "total": 96
+  "keystone": 47,
+  "total": 97
  },
  "data": [
   {
@@ -1446,6 +1446,21 @@
    "issue_number": null,
    "issue_url": "",
    "created_at": "2026-10-23T06:21:45.685193"
+  },
+  {
+   "instance": "keystone",
+   "instance_url": "https://class.agentswitch.theschoolofai.in",
+   "id": "ddf960d2-5e0a-46b9-b533-2714a10a5be4",
+   "description": "Four agent seats show an active assignment to users who are not active workspace members (seats 1, 2, 16, 24 on both instances) (LOW)\n\nWhat happened (2026-10-24, MCP as team07, read-only):\n- endpoint.crm.owners (GET /api/crm/owners, Release 13) lists \"the active members of this\n  workspace\": Keystone 32, Suryodaya 30. It includes Team 03-15, 17-23, 25, 27 (and 26 on\n  Keystone), but not Team 01, 02, 16 or 24.\n- AgentSeat.list: seats 1 (Ledger Agent), 2 (AR Agent), 16 (Asset Agent) and 24 (Approvals Agent)\n  have is_active true, assignment_active true and an assigned_user_id, assigned 2026-09-17:\n  Keystone 4420de60, 986f7db6, e683923b, b7561cd1; Suryodaya 822a7ac0, 595f5152, 264723ab, 93871666.\n  None of these ids is in the owners list. Every other assigned seat (22 on Keystone, 23 on\n  Suryodaya) resolves to a listed member.\n\nExpected: when a user is deactivated or removed from the workspace, their seat assignment ends\n(assignment_active false), or the seat reports the assignee as inactive. The two endpoints should\nagree on who is active.\nImpact: the seat directory shows four core seats (two accounting seats, Assets, Approvals) as\nstaffed when nobody active holds them, so escalations and hand-offs routed to \"the seat's user\"\ngo to a dead account. Low, because we can't see whether anything routes on assigned_user_id today.",
+   "page": "CRM:Home",
+   "agent_seat": "07 Pipeline",
+   "job_id": "",
+   "status": "new",
+   "resolution_note": null,
+   "delivery": "local",
+   "issue_number": null,
+   "issue_url": "",
+   "created_at": "2026-10-24T05:22:21.319482"
   }
  ],
  "no_longer_listed": {

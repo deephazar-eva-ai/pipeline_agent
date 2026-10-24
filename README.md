@@ -213,9 +213,11 @@ design are in [`docs/integration_testing_runs_consolidated.md`](docs/integration
 ### Platform bugs filed
 
 [`bugs/mybugs_all_2026-09-30.json`](bugs/mybugs_all_2026-09-30.json): the full
-`GET /api/bug-report/mine` export, refreshed 2026-10-24: **96 reports** filed between
-2026-09-18 and 2026-10-23 (Suryodaya 50, Keystone 46), all still `new` in the platform.
-The latest two are on Keystone: `bdec2b73` (2026-10-22, privacy requests; body in
+`GET /api/bug-report/mine` export, refreshed 2026-10-24: **97 reports** filed between
+2026-09-18 and 2026-10-24 (Suryodaya 50, Keystone 47), all still `new` in the platform.
+The latest three are on Keystone: `ddf960d2` (2026-10-24, seats 1, 2, 16 and 24 still
+show an active assignment to users who are not active members; body in
+`bugs/bughunt_filed_2026-10-24.json`), `bdec2b73` (2026-10-22, privacy requests; body in
 `bugs/bughunt_filed_2026-10-22.json`, accepted by the instructor as N498) and `c9c9078a`
 (2026-10-23, `tools.preview` reports `allowed` and `approval_required: false` for calls
 the commit refuses; body in `bugs/bughunt_filed_2026-10-23.json`). The instructor has announced one as fixed:

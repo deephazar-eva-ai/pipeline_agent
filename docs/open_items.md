@@ -358,10 +358,11 @@ Full report, including the eight platform bugs filed on 2026-09-24:
 - Item 3: done, read-only. `sales_only=true` returns only Team 06/07/08; lead
   auto-assignment is off on both instances (`auto_assign_leads: false`, `manual`), so
   not a bug. One candidate: seats 1, 2, 16, 24 report an active assignment to users
-  `owners` doesn't list (draft R, LOW, `more_bughunt.md` §22.1, not filed).
+  `owners` doesn't list. Filed on Keystone as `ddf960d2` (LOW), so **97 bugs**
+  (su 50, ks 47).
 - Item 4: left unfiled (team decision confirmed 2026-10-24).
-- Item 5: done. 96 listed (su 50, ks 46), all `new`; `bdec2b73` and `c9c9078a` added
-  to the export. No status or resolution notes changed, not even for `4681e718`
+- Item 5: done. 97 listed (su 50, ks 47) after `ddf960d2`, all `new`; `bdec2b73`,
+  `c9c9078a` and `ddf960d2` added to the export. No status or resolution notes changed, not even for `4681e718`
   (fixed) or `bdec2b73` (accepted).
 - Item 6: this pass.
 
