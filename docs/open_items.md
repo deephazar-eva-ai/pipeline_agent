@@ -269,8 +269,10 @@ Full report, including the eight platform bugs filed on 2026-09-24:
    `tests/test_pipeline_enhancements.py` covers rotting deal, existing and missing
    next action, and bad stage data offline; the team's `tests/test_remaining.py`
    (2026-10-23) covers no recent contact and concurrent change offline. The refusal
-   task in `tasks/` is the live case. Still missing: live verifiers for the offline
-   cases (plan T5 in `docs/remainingtests.md`). Per the rubric an AI-authored
+   task in `tasks/` is a live case, and the team's `tests/test_live_verifier.py` (T5 V-A,
+   2026-10-24) checks rotting deal and no recent contact live on both instances. Still
+   missing: live verifiers for the write cases V-B and V-C (plan T5 in
+   `docs/remainingtests.md`). Per the rubric an AI-authored
    test scores zero, so these stay with the team - see `tasks/README.md` and
    `tests/README.md`.
 7. **The "Cancelled" Activity flag shipped in Release 13** (instructor N478; seen
@@ -315,11 +317,11 @@ Full report, including the eight platform bugs filed on 2026-09-24:
 |---|---|
 | Central submission | **Run 7 passed 14/14** on `136733a` (2026-10-23 10:40 IST, Keystone + Suryodaya, 174,121 tokens). Confirmed by the instructor ("your latest run passed 14/14"). This was the last allowed submission before the deadline; there's no window until 2026-10-26 |
 | Registered harness | `TeamHarness` on both instances: repo `deephazar-eva-ai/pipeline_agent`, branch `central-eval` (`90051a3`, docs only after `136733a`) |
-| `main` | `f3ef1c3`, pushed, clean. 478 offline tests pass |
+| `main` | `6ee8ab2`, pushed, clean. 478 offline tests pass, 1 skipped (the opt-in live verifier) |
 | Release 13 (2026-10-23) | Live. It fixed our 15–21 Oct reports, added the `endpoint.crm.owners` tool (235 tools) and `Activity.cancelled` (N478) |
 | `Activity.cancelled` | Handled on `main` (`b5244bf`); the team's tests T6 are in `tests/test_remaining.py` (`11e7f00`). Legacy "Cancelled" rows were not migrated (ks 127, su 9); the outcome-prefix fallback covers them. Live canonical numbers unchanged: ks 25 rotting / 8 uncalled, su 54 / 21 |
-| Bugs | **96 filed** (Suryodaya 50, Keystone 46). Latest: `c9c9078a` (`tools.preview`, 2026-10-23). `bdec2b73` (privacy requests) accepted by the instructor as N498, queued for Release 14. `4681e718` fixed (N489) |
-| Scored test matrix | Offline: rotting deal, existing/missing next action, bad stage data (`test_pipeline_enhancements.py`); no recent contact, concurrent change (`test_remaining.py`). Live: refusal task. Missing: live verifiers for the offline cases |
+| Bugs | **97 filed** (Suryodaya 50, Keystone 47). Latest: `ddf960d2` (stale seat assignments, 2026-10-24). `bdec2b73` (privacy requests) accepted by the instructor as N498, queued for Release 14. `4681e718` fixed (N489) |
+| Scored test matrix | Offline: rotting deal, existing/missing next action, bad stage data (`test_pipeline_enhancements.py`); no recent contact, concurrent change (`test_remaining.py`). Live: refusal task; T5 V-A (`test_live_verifier.py`, rotting deal and no recent contact) passed on both instances 2026-10-24. Missing: live verifiers for the write cases (V-B, V-C) |
 
 ### Tasks, in order (all optional; nothing is required for the submission)
 
@@ -364,7 +366,9 @@ Full report, including the eight platform bugs filed on 2026-09-24:
 - Item 5: done. 97 listed (su 50, ks 47) after `ddf960d2`, all `new`; `bdec2b73`,
   `c9c9078a` and `ddf960d2` added to the export. No status or resolution notes changed, not even for `4681e718`
   (fixed) or `bdec2b73` (accepted).
-- Item 6: this pass.
+- Item 6: done. Status table, test and module counts (479 in 22 modules: 478 offline
+  plus the live verifier) and the README status refreshed. `central-eval` left at
+  `90051a3`; no new central run.
 
 ### Don'ts
 

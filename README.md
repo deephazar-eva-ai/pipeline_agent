@@ -75,11 +75,11 @@ postcondition on the live platform.
 
 ### Offline regression suite
 
-`tests/` holds 478 offline tests in 21 modules (`.venv/bin/pytest tests -q`; 478 passed
-on 2026-10-23). They cover the workflow, guards, preflight, transport, artifacts, the
+`tests/` holds 479 tests in 22 modules (`.venv/bin/pytest tests -q`; 478 passed and 1
+skipped on 2026-10-24; the skip is the opt-in live verifier `test_live_verifier.py`). They cover the workflow, guards, preflight, transport, artifacts, the
 loop's token and time budgets and Keystone-specific contracts. Two modules,
 `test_pipeline_enhancements.py` and `test_remaining.py`, are part of the scored matrix
-(above). The other 19 are
+(above), as is the live verifier. The other 19 are
 regression tests that protect the code and are not scored. None of them can prove a
 postcondition on the live platform. See `tests/README.md`.
 
@@ -268,10 +268,10 @@ invalidated and what it changed.
 
 Still outstanding: write mode (`--exec-mode create-next-actions`) has run
 exactly once, on one deal, with consent - not at scale; the measured rot
-boundary is a range (`[5, 9]` days) rather than a number; neither model
-backend has made a real API call; and the scored task matrix, written by the
-team, still lacks the no-recent-contact and concurrent-change cases and any live
-verifier beyond the refusal task. Full status: `docs/open_items.md`.
+boundary is a range (`[5, 9]` days) rather than a number; and the scored task
+matrix, written by the team, covers all cases offline and has live verifiers for
+the refusal task and T5 V-A (rotting deal, no recent contact) but not yet for the
+write cases (V-B, V-C). Full status: `docs/open_items.md`.
 
 ## Layout
 
@@ -296,7 +296,7 @@ src/pipeline_agent/
   runner.py                    CLI entry point (Phase 4)
   central_runner.py            central evaluator entry point (agentswitch-harness.toml)
 tasks/          scored, human-authored tasks + verifiers (refusal task so far) and run_refusal_task.sh
-tests/          offline suite, 478 tests in 21 modules; test_pipeline_enhancements.py and test_remaining.py are part of the scored matrix (see tests/README.md)
+tests/          479 tests in 22 modules (478 offline + the opt-in live verifier); test_pipeline_enhancements.py, test_remaining.py and test_live_verifier.py are part of the scored matrix (see tests/README.md)
 docs/           architecture.md, agent_contract.md, open_items.md, pipeline_agent_summary.md, IT-01 and central run records
 bugs/           filed platform bug records and bug-hunt fixtures
 agentswitch-harness.toml   central evaluator config
