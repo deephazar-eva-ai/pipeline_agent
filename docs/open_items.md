@@ -350,6 +350,21 @@ Full report, including the eight platform bugs filed on 2026-09-24:
    Optionally fast-forward `central-eval` to `main`. It's only docs plus the
    cancelled-flag fix, and **no new central run** would be submitted.
 
+### Progress on 2026-10-24
+
+- Item 1: `main` = `origin/main` (`f589a43`), clean, 478 passed. Instructor channel not
+  read from here.
+- Item 2: not started (team-written).
+- Item 3: done, read-only. `sales_only=true` returns only Team 06/07/08; lead
+  auto-assignment is off on both instances (`auto_assign_leads: false`, `manual`), so
+  not a bug. One candidate: seats 1, 2, 16, 24 report an active assignment to users
+  `owners` doesn't list (draft R, LOW, `more_bughunt.md` §22.1, not filed).
+- Item 4: left unfiled (team decision confirmed 2026-10-24).
+- Item 5: done. 96 listed (su 50, ks 46), all `new`; `bdec2b73` and `c9c9078a` added
+  to the export. No status or resolution notes changed, not even for `4681e718`
+  (fixed) or `bdec2b73` (accepted).
+- Item 6: this pass.
+
 ### Don'ts
 
 - **Don't submit another central run.** Keystone's `HarnessRun.list_mine` still
