@@ -9,8 +9,10 @@ and tenant contracts.
 
 Two modules, `test_pipeline_enhancements.py` and `test_remaining.py`, are part of
 the scored task matrix: the team wrote them by hand, and the root `README.md` maps
-their tests to the matrix cases. The other modules are regression tests and are not scored. No test here
-can prove a shared-CRM postcondition, because everything runs offline. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
+their tests to the matrix cases. The other modules are regression tests and are not scored. No offline
+test can prove a shared-CRM postcondition. `test_live_verifier.py` (also written by the
+team) does: it is skipped unless `RUN_LIVE_VERIFIER=1` is set, and its verdicts are in
+`live_evidence/`. See [TEST_CASES.md](TEST_CASES.md) for the coverage catalogue,
 [EVIDENCE.md](EVIDENCE.md) for the latest execution record, and
 [US_ENTITY_SNAPSHOT_SCHEMA.md](US_ENTITY_SNAPSHOT_SCHEMA.md) for the synthetic
 US fixture contract.
@@ -89,6 +91,12 @@ loaded only by the snapshot test, and contains no live tenant data.
   runner's failed rows, results file and loop pass rule, and the Release 13
   `Activity.cancelled` flag (T6). Plan and expected
   results: `docs/remainingtests.md`. Written by hand by the team.
+- `test_live_verifier.py` — T5 V-A, live and opt-in
+  (`RUN_LIVE_VERIFIER=1 PYTHONPATH=src .venv/bin/pytest tests/test_live_verifier.py -q -s`
+  with `AGENTSWITCH_MCP_URL`/`_TOKEN`/`TENANT` set). Runs the canonical task in propose
+  mode, recomputes rotting deals and uncalled customers from the platform with its own
+  rules, and asserts an exact match and zero writes. Passed on both instances on
+  2026-10-24. Written by hand by the team.
 - `keystone_support.py` — fixed-clock Activity client and CRM record builders
   shared by Keystone scenarios.
 

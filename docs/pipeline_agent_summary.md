@@ -141,7 +141,7 @@ On Suryodaya, most of the data issues are deals with no contact (66) or no owner
 
 ### Tests and bugs
 
-- **Tests:** offline suite, 478 passed (2026-10-23); 418 also passed on a clean Python 3.11 install on 2026-10-19.
+- **Tests:** offline suite, 478 passed (2026-10-24); live verifier T5 V-A passed on Keystone and Suryodaya (2026-10-24); 418 also passed on a clean Python 3.11 install on 2026-10-19.
 - **Bugs:** 97 filed (Suryodaya 50, Keystone 47), all listed in the 2026-10-24 export and all still `new`; the latest are `bdec2b73` (2026-10-22, accepted as N498), `c9c9078a` (2026-10-23) and `ddf960d2` (2026-10-24, stale seat assignments). `4681e718` was fixed by the platform (N489) and verified live on 2026-10-23. Two earlier reports are no longer listed by the platform: `279bea18` (superseded by `9268a84a`) and `cd26e205` (stage records since fixed or reseeded).
 
 ### Still open
@@ -150,7 +150,7 @@ See `docs/open_items.md`.
 
 - Write mode (`create-next-actions`) has not been run at scale.
 - The `openai` and `openrouter` backends are exercised live (central runs, local runs); the loop's 140k budget is sized for the evaluator's model, which needs about twice as many calls as Sonnet on Suryodaya.
-- The scored task matrix: the refusal task (live), `tests/test_pipeline_enhancements.py` (offline: rotting deal, existing and missing next action, bad stage data) and `tests/test_remaining.py` (offline: no recent contact, concurrent change; added 2026-10-23). Live verifiers for the other cases remain, to be written by a human (plan T5 in `docs/remainingtests.md`); AI-written tests score zero under the rubric.
+- The scored task matrix: the refusal task (live), `tests/test_pipeline_enhancements.py` (offline: rotting deal, existing and missing next action, bad stage data) and `tests/test_remaining.py` (offline: no recent contact, concurrent change; added 2026-10-23). Live: `tests/test_live_verifier.py` (team-written, T5 V-A) passed on both instances on 2026-10-24 for rotting deal and no recent contact. Live verifiers for the write cases (V-B, V-C) remain; AI-written tests score zero under the rubric.
 
 ### Not on `main` yet
 

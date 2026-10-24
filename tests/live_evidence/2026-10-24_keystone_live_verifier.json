@@ -1,0 +1,131 @@
+{
+  "after": {
+    "Activity": {
+      "count": 328,
+      "latest_team07_update": "2026-10-06T08:46:53.174302"
+    },
+    "Deal": {
+      "count": 189,
+      "latest_team07_update": null
+    }
+  },
+  "before": {
+    "Activity": {
+      "count": 328,
+      "latest_team07_update": "2026-10-06T08:46:53.174302"
+    },
+    "Deal": {
+      "count": 189,
+      "latest_team07_update": null
+    }
+  },
+  "company_timezone": "America/New_York",
+  "company_today": "2026-10-24",
+  "days_since": {
+    "00ef8573-9f8c-4c98-abe5-4363e2076247": 77,
+    "019eb426-aed7-4b2a-b56d-c97acacf00fc": 74,
+    "29662773-3730-41d7-85c8-8a9620011be3": 65,
+    "32103393-e167-4060-b919-7fcc772ad635": 81,
+    "3d4a60d9-fc2d-41fd-b34a-070b45cf8c93": 81,
+    "48651ea8-a93c-4732-bcac-bc98e7417e58": 86,
+    "52f7e986-1423-484c-bbc1-f62613e946c8": 70,
+    "5cbf9f2b-3e81-4d98-8e55-b8e2da3e9641": 81,
+    "63211016-f97f-42de-bdee-702c20b1894e": 86,
+    "67c77c69-ecd7-42c5-b47a-b7775284b5c6": 40,
+    "7a9ce5c1-78cb-4834-9da8-6c23bdea77c9": 80,
+    "8047bb93-175f-400f-93a3-5c8f6b73c8b5": 80,
+    "88748abf-c87d-4452-971e-fd0f2bf6cdfd": 80,
+    "895ce778-66d8-4b1a-987e-28a6c9518a2e": 123,
+    "964164f7-52d5-407b-84c7-c6c63ed2d87b": 77,
+    "a5a0ba29-3e87-4445-b8c1-b9b1dcafdedc": 81,
+    "aaa14be2-8227-401e-8513-890f6e4f335b": 70,
+    "ad7a7809-c77b-420d-a6f4-12a5987db1e4": 70,
+    "b76daedb-bbb9-4e6a-8f37-385ad8b9c24d": 74,
+    "bec7ffe3-da4b-4370-8181-bab91660b09e": 74,
+    "c9e283a2-8ac7-4c2e-ab37-ef0f80a55819": 40,
+    "cfa6d4ec-162b-4836-a615-5b2055a8bd4d": 153,
+    "d7898273-d3db-43fc-91ac-1f8aaaa2cfc7": 70,
+    "dee26b3b-a91e-4abc-ba61-03bbbcdb409e": 81,
+    "ede8a940-2f4c-4ff2-a7d0-5061ae6972da": 86
+  },
+  "deal_rot_days": 30,
+  "platform_flagged_rotting_deal_ids": [
+    "00ef8573-9f8c-4c98-abe5-4363e2076247",
+    "019eb426-aed7-4b2a-b56d-c97acacf00fc",
+    "29662773-3730-41d7-85c8-8a9620011be3",
+    "32103393-e167-4060-b919-7fcc772ad635",
+    "3d4a60d9-fc2d-41fd-b34a-070b45cf8c93",
+    "48651ea8-a93c-4732-bcac-bc98e7417e58",
+    "52f7e986-1423-484c-bbc1-f62613e946c8",
+    "5cbf9f2b-3e81-4d98-8e55-b8e2da3e9641",
+    "63211016-f97f-42de-bdee-702c20b1894e",
+    "67c77c69-ecd7-42c5-b47a-b7775284b5c6",
+    "7a9ce5c1-78cb-4834-9da8-6c23bdea77c9",
+    "8047bb93-175f-400f-93a3-5c8f6b73c8b5",
+    "88748abf-c87d-4452-971e-fd0f2bf6cdfd",
+    "895ce778-66d8-4b1a-987e-28a6c9518a2e",
+    "964164f7-52d5-407b-84c7-c6c63ed2d87b",
+    "a5a0ba29-3e87-4445-b8c1-b9b1dcafdedc",
+    "aaa14be2-8227-401e-8513-890f6e4f335b",
+    "ad7a7809-c77b-420d-a6f4-12a5987db1e4",
+    "b76daedb-bbb9-4e6a-8f37-385ad8b9c24d",
+    "bec7ffe3-da4b-4370-8181-bab91660b09e",
+    "c9e283a2-8ac7-4c2e-ab37-ef0f80a55819",
+    "cfa6d4ec-162b-4836-a615-5b2055a8bd4d",
+    "d7898273-d3db-43fc-91ac-1f8aaaa2cfc7",
+    "dee26b3b-a91e-4abc-ba61-03bbbcdb409e",
+    "ede8a940-2f4c-4ff2-a7d0-5061ae6972da"
+  ],
+  "rotting_deal_ids": [
+    "00ef8573-9f8c-4c98-abe5-4363e2076247",
+    "019eb426-aed7-4b2a-b56d-c97acacf00fc",
+    "29662773-3730-41d7-85c8-8a9620011be3",
+    "32103393-e167-4060-b919-7fcc772ad635",
+    "3d4a60d9-fc2d-41fd-b34a-070b45cf8c93",
+    "48651ea8-a93c-4732-bcac-bc98e7417e58",
+    "52f7e986-1423-484c-bbc1-f62613e946c8",
+    "5cbf9f2b-3e81-4d98-8e55-b8e2da3e9641",
+    "63211016-f97f-42de-bdee-702c20b1894e",
+    "67c77c69-ecd7-42c5-b47a-b7775284b5c6",
+    "7a9ce5c1-78cb-4834-9da8-6c23bdea77c9",
+    "8047bb93-175f-400f-93a3-5c8f6b73c8b5",
+    "88748abf-c87d-4452-971e-fd0f2bf6cdfd",
+    "895ce778-66d8-4b1a-987e-28a6c9518a2e",
+    "964164f7-52d5-407b-84c7-c6c63ed2d87b",
+    "a5a0ba29-3e87-4445-b8c1-b9b1dcafdedc",
+    "aaa14be2-8227-401e-8513-890f6e4f335b",
+    "ad7a7809-c77b-420d-a6f4-12a5987db1e4",
+    "b76daedb-bbb9-4e6a-8f37-385ad8b9c24d",
+    "bec7ffe3-da4b-4370-8181-bab91660b09e",
+    "c9e283a2-8ac7-4c2e-ab37-ef0f80a55819",
+    "cfa6d4ec-162b-4836-a615-5b2055a8bd4d",
+    "d7898273-d3db-43fc-91ac-1f8aaaa2cfc7",
+    "dee26b3b-a91e-4abc-ba61-03bbbcdb409e",
+    "ede8a940-2f4c-4ff2-a7d0-5061ae6972da"
+  ],
+  "run_started_at": "2026-10-24T16:30:57.123627+00:00",
+  "spot_check_deal_ids": [
+    "11a0e40b-fe45-4279-b690-903da99581ba",
+    "1d1dda22-0786-4209-ab19-cba481204931",
+    "200266b1-c270-4ecf-a272-fea30e40c733",
+    "27467fa8-8290-4a85-ad3a-145e031c13b7",
+    "2a10ed6a-f87c-4cac-a2dc-f26662fd9610"
+  ],
+  "test_fixture_deal_ids_excluded": [
+    "11bbffba-7faf-4d8d-a2dd-44f0996b1522",
+    "53ddc47a-016e-438d-9c8c-69fff97be763"
+  ],
+  "uncalled_party_ids_checked": [
+    "1baa7378-975f-4b9e-bb54-e36137cb7449",
+    "1f34a82e-9389-419d-860c-96aa208dcbc0",
+    "62f8d1c3-1fc9-4e16-b967-1463c2c86936",
+    "6af85bcc-d70e-4184-9ffd-70c2416f58c1",
+    "a8bc7548-123f-483a-a3a4-ee9c1894dec1",
+    "ba5a1f11-ae19-4a7b-8c2a-407c9ecf75c1",
+    "cede277d-a391-43ed-8276-d9ccc1874031",
+    "e72f519c-19e7-4842-ae63-7e7f3f4c9874"
+  ],
+  "verdict": "pass",
+  "verifier": "tests/test_live_verifier.py",
+  "volatile_deal_ids_excluded": []
+}

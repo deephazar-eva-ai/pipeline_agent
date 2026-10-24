@@ -354,7 +354,7 @@ Full report, including the eight platform bugs filed on 2026-09-24:
 
 - Item 1: `main` = `origin/main` (`f589a43`), clean, 478 passed. Instructor channel not
   read from here.
-- Item 2: not started (team-written).
+- Item 2: done. `tests/test_live_verifier.py` (team-written) passed on both instances; see the sections at the end.
 - Item 3: done, read-only. `sales_only=true` returns only Team 06/07/08; lead
   auto-assignment is off on both instances (`auto_assign_leads: false`, `manual`), so
   not a bug. One candidate: seats 1, 2, 16, 24 report an active assignment to users
@@ -383,3 +383,178 @@ Full report, including the eight platform bugs filed on 2026-09-24:
   our own rot (the instructor said rot will count days since the last completed,
   non-cancelled activity).
 - `phase2-gap-fillup` stays unmerged (its write paths have never run live).
+
+## T5 V-A live verifier: details (2026-10-24)
+
+T5 is the one gap left in the scored test matrix. All five offline cases have tests,
+and the refusal task has a live verifier, but nothing yet checks the canonical answer
+against the live platform. The rubric asks for "verifiers that read the database
+directly, not the agent's own prose". Full plan: `docs/remainingtests.md` §T5.
+
+### What V-A is
+
+V-A is the read-only part and needs no consent. It's one script with two steps, built
+like `tasks/mandatory_refusal_task.py`.
+
+1. **Run step.**
+   - Before the run, record counts of the rows that would show a write: Activities
+     and Deals, plus the latest `updated_at` on rows created by team07.
+   - Run the agent in propose mode:
+     `PYTHONPATH=src python3 -m pipeline_agent.runner --task canonical --mode live`
+   - The answer lands in `runs/<ts>__canonical__live__<id>/result.json`.
+2. **Verify step.**
+   - Ignore the agent's text. Read `CRMPreferences`, all open Deals and all
+     Activities yourself.
+   - Work out which deals are rotting and which customers are uncalled on your own.
+   - Compare with `result.json` and exit with 0 (pass), 1 (fail) or 3 (blocked).
+
+### Rules the verifier has to re-derive
+
+Write these from the rules themselves, not by copying `workflow.py`. A copy would only
+test the code against itself.
+
+| Rule | Detail |
+|---|---|
+| Threshold | `CRMPreferences.deal_rot_days` (currently 30), and it must be **exceeded**: 30 days is not rotting, 31 is |
+| What counts as contact | `done` is true; `type` is call, meeting or email; not cancelled (`cancelled` is true, or, on older rows, `outcome` starts with "Cancelled"); not written by the agent (`created_by=pipeline_agent` in the description) |
+| Date of a contact | `due_date`, not `created_at`; ignore future dates; count days in the company's timezone (Keystone America/New_York, Suryodaya Asia/Kolkata) |
+| Linking contact to a deal | by `deal_id`, or by `party_id` on rows with no `deal_id` (the platform rarely fills `deal_id`) |
+| Which deals | Open deals only. Deals whose only party is a supplier or employee are excluded (the agent marks them with `non_sales_reason`) |
+| Uncalled customers | No completed `type == "call"` for that party in the last 30 days |
+
+### Asserts
+
+1. **Rotting deals match exactly:** your set of rotting deal ids equals the agent's.
+   Other teams write to the same data, so allow one tolerance: re-read any deal or
+   activity whose `updated_at` falls after the run started, and exclude it.
+2. **Day counts match:** `days_since` agrees exactly on every listed deal.
+3. **Spot checks:** pick 3–5 deals the agent didn't list and confirm each is fresh,
+   closed or excluded as non-sales.
+4. **Uncalled customers check out:** for each one, there's no completed call in the
+   last 30 days.
+5. **Zero writes:** the counts and latest `updated_at` are the same before and after.
+
+Expect roughly Keystone 25 rotting / 8 uncalled and Suryodaya 54 / 21 (from Run 7), but
+don't hard-code these numbers because the data changes. Keep the run folder and the
+verifier's output as evidence.
+
+### Effort and timing
+
+- About half a day, and the deadline is 23:59 IST on 2026-10-24. Keystone alone is
+  enough ("at least one instance").
+- Gaps to watch for:
+  - **Timezone:** off-by-one days when "today" isn't taken in the company's timezone.
+  - **Older cancelled rows:** they still carry only the "Cancelled" outcome text, not
+    the flag (Keystone 127, Suryodaya 9).
+  - **Shared data:** other teams changing rows mid-run.
+
+
+
+## T5 V-A first live run: results (2026-10-24)
+
+The team's verifier is `tests/test_live_verifier.py`. It's skipped unless
+`RUN_LIVE_VERIFIER=1` is set, and it's not committed yet.
+
+| Run | Result |
+|---|---|
+| Offline suite | 478 passed, 1 skipped (the live verifier, opt-in only) |
+| Live, Keystone (15:55 UTC) | **Passed** in 59 s. The 25 rotting deals matched exactly, with the same day counts; 8 uncalled customers checked; 5 spot checks; zero writes (Deal 189 / Activity 328 before and after). Verdict file: `runs/20261024T155515Z__canonical__live__3378ba75/live_verifier.json` |
+| Live, Suryodaya (15:56 UTC) | **Failed** at `test_live_verifier.py:258` (`rotting deals differ: missing=[], unexpected=[2573d64d…, d8d18b7e…]`). Run: `runs/20261024T155623Z__canonical__live__24b19f58` |
+
+### The failure
+
+The agent isn't wrong here. The verifier checks a narrower rule than the agent
+promises.
+
+- **What the agent promises:** `docs/agent_contract.md` ("Rot: three signals, never
+  one") defines a rotting deal as one that *any* of three signals flags:
+  1. the platform's own `_rot_level` (anything other than `fresh`/`none`);
+  2. our own count of days since the last real contact, compared with
+     `deal_rot_days`;
+  3. on deals the agent wrote to, the platform's formula with the agent's rows removed.
+- **What the verifier checks:** only signal 2.
+- **The two extra deals:** `2573d64d` and `d8d18b7e` are both stage `new` and 26 days
+  old with no contact, so signal 2 says fresh (26 is not more than 30). The platform
+  has already marked both `_rot_level: attention`, because on Suryodaya it flags at
+  about 5 days. The agent reports exactly this: `platform_flags: true`,
+  `independently_flags: false`, `independent_rot_days: 26`.
+- **Why Keystone passed:** all 25 deals there tripped both signals 1 and 2. On
+  Suryodaya, 52 deals tripped both and these 2 tripped only the platform's flag.
+
+### Proposed fix (the team edits the test, so it stays team-written)
+
+- In the loop that builds `expected` (around line 251), also count a deal as rotting
+  when the Deal row read from the platform has a `_rot_level` other than `fresh`,
+  `none` or empty.
+- Keep storing the verifier's own `age` for those deals. The day-count assert (line
+  264) still holds, since both deals show `independent_rot_days` 26.
+- This still checks against the platform's data, not the agent's text, so it meets the
+  rubric's "reads the database directly".
+- Signal 3 can be left out for now: it only applies to deals the agent wrote to, and
+  there were none in these runs.
+- After the edit, rerun both instances:
+  `RUN_LIVE_VERIFIER=1 PYTHONPATH=src .venv/bin/pytest tests/test_live_verifier.py -q -s`
+  (with `AGENTSWITCH_MCP_URL`, `AGENTSWITCH_MCP_TOKEN` and `AGENTSWITCH_TENANT` set for
+  each instance). Keep both `live_verifier.json` files as evidence.
+
+
+## T5 V-A second live run: results (2026-10-24)
+
+The team updated `tests/test_live_verifier.py` with the fix above: platform-flagged
+deals (`_rot_level` other than `fresh`/`none`) now count as expected rotting deals.
+
+| Run | Result |
+|---|---|
+| Offline suite | 478 passed, 1 skipped (the live verifier, opt-in only) |
+| Live, Suryodaya (16:15 UTC) | **Passed** in 64 s. Run: `runs/20261024T161530Z__canonical__live__9c8dbdb7` |
+| Live, Keystone (16:14 UTC) | **Failed** at `test_live_verifier.py:258` (`rotting deals differ: missing=[11bbffba…, 53ddc47a…], unexpected=[]`). Run: `runs/20261024T161430Z__canonical__live__0113027c` |
+
+### The failure
+
+This time the verifier expects two deals the agent didn't list. Both are our own old
+test fixtures on Keystone:
+
+| Deal | Title | Stage | Platform flag | Age |
+|---|---|---|---|---|
+| `11bbffba` | `[team07-test IT-01] D11` | `IT01_unknown_stage` | `attention` | 16 days |
+| `53ddc47a` | `[team07-test KS-TP-20260928] V-bogus-stage` | `bogus_stage` | `attention` | 26 days |
+
+- **The agent is behaving as documented.** It deliberately leaves out test-tagged
+  deals: `docs/agent_contract.md` ("Test data") says open deals tagged
+  `[teamNN-test…]` or `[teamNN-probe…]` in the deal title or party name go to
+  `excluded_deals` with reason `test fixture`, unless `PIPELINE_INCLUDE_TEST_DATA=1`
+  is set. Both deals are in the run's `excluded_deals` with that reason.
+- **Why the first Keystone run passed:** both deals are under 30 days, so the
+  day-count-only check never expected them. The platform-flag change now does.
+- **Why Suryodaya passed:** no test-tagged open deal there was platform-flagged in this
+  run. It could happen at any time, because other teams' fixtures share the book.
+
+### Proposed fix (the team edits the test, so it stays team-written)
+
+- In the loop that builds `expected` (around line 251), also skip a deal when its title
+  or its party's name contains a tag matching `[team<digits>-test` or
+  `[team<digits>-probe`. Use any team number, not just 07.
+- Read the title and party name from the platform rows (Deal `title`, and the Party
+  `name` looked up by `party_id`), not from the agent's `excluded_deals`. That keeps
+  it an independent check of the documented rule.
+- Apply the same skip to the omitted-deal spot check (around line 285), so it never
+  picks a test fixture.
+- Then rerun both instances:
+  `RUN_LIVE_VERIFIER=1 PYTHONPATH=src .venv/bin/pytest tests/test_live_verifier.py -q -s`
+  (with `AGENTSWITCH_MCP_URL`, `AGENTSWITCH_MCP_TOKEN` and `AGENTSWITCH_TENANT` set for
+  each instance). Keep both `live_verifier.json` files as evidence.
+
+
+## T5 V-A third live run: passed (2026-10-24)
+
+The team added the test-tag skip. Committed as `41465e6`.
+
+| Run | Result |
+|---|---|
+| Offline suite | 478 passed, 1 skipped (the live verifier, opt-in only) |
+| Live, Keystone (16:31 UTC) | **Passed** in 58 s. 25 rotting deals, exact match with the same day counts; 8 uncalled customers checked; 5 spot checks; no deal excluded for changing mid-run; zero writes (Deal 189 / Activity 328 before and after) |
+| Live, Suryodaya (16:32 UTC) | **Passed** in 56 s. 54 rotting deals, exact match; 21 uncalled customers checked; 5 spot checks; none excluded; zero writes (Deal 250 / Activity 187 before and after) |
+
+The verdict files are copied to `tests/live_evidence/` (`runs/` is gitignored). The
+README matrix, `tests/README.md`, `tests/EVIDENCE.md`, `tests/TEST_CASES.md`,
+`docs/remainingtests.md` and the summary now record T5 V-A as passed live.

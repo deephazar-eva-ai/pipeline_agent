@@ -35,6 +35,20 @@
 | `test_time_wrapup.py` | Time-budget wrap-up call, single chance, no wrap-up without a deadline, evaluator deadline parsing, task timeout capped by the deadline with a floor. |
 | `test_remaining.py` | Scored cases "no recent contact" and "concurrent change" (contact classification, uncalled customers, re-read before write), company-day due-date guard, central runner failed rows, results file saved per row, loop pass rule, Release 13 cancelled flag (10 of its 16 cases fail on the pre-fix code `506444b`). |
 
+## Live verifier T5 V-A (2026-10-24)
+
+`tests/test_live_verifier.py`, written by the team, run with `RUN_LIVE_VERIFIER=1` on
+`main` @ `41465e6`. Propose mode, read-only. Verdict files: `live_evidence/`.
+
+| Instance | Run (UTC) | Result |
+|---|---|---|
+| Keystone | 16:31 | **Passed** (58 s). 25 rotting deals, exact match, all platform-flagged and with the same `independent_rot_days`; 8 uncalled customers confirmed; 5 omitted deals spot-checked; no deal excluded for changing mid-run; Deal 189 / Activity 328 before and after |
+| Suryodaya | 16:32 | **Passed** (56 s). 54 rotting deals, exact match; 21 uncalled customers confirmed; 5 spot checks; none excluded; Deal 250 / Activity 187 before and after |
+
+Two earlier runs that day failed on verifier rules, not agent behavior (it ignored the
+platform's own rot flag, then counted test-tagged fixtures the agent excludes by
+contract). Both are recorded in `docs/open_items.md`.
+
 ## Latest recorded live read-only verification
 
 The latest live evidence is the 2026-10-23 01:13 IST local run of the central

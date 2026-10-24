@@ -299,7 +299,7 @@ Writing CX-01 … CX-12 gives about 12 tests (~1 h).
 - [ ] T2 written and passing (CC-01 … CC-06)
 - [ ] T3 written and passing (DG-01 … DG-05)
 - [ ] T4 written and passing (TB-01 … TB-04)
-- [ ] T5 V-A live verifier run on at least one instance; artifacts kept
+- [x] T5 V-A live verifier run on at least one instance; artifacts kept (`tests/test_live_verifier.py`, both instances passed 2026-10-24, `tests/live_evidence/`)
 - [x] T6 written and passing (CX-01 … CX-12), `tests/test_remaining.py`, 2026-10-23
 - [ ] Tell Claude the module names, so the docs (README matrix, tests/README, TEST_CASES, EVIDENCE) get updated
 - [ ] Commit and push to `main`
